@@ -1,7 +1,7 @@
-import { IBM_Plex_Sans_Thai } from "next/font/google";
+import { Mali } from "next/font/google";
 import "./globals.css";
 
-const font = IBM_Plex_Sans_Thai({ subsets: ["thai", "latin"], weight: ["400", "500", "700"] });
+const font = Mali({ subsets: ["thai", "latin"], weight: ["400", "500", "700"] });
 
 export const metadata = {
   title: "Calorie",
@@ -13,7 +13,7 @@ export const viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#EEF3EC",
+  themeColor: "#EAF4FF",
 };
 
 export default function RootLayout({ children }) {
