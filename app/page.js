@@ -72,6 +72,43 @@ function resize(file, max = 1024) {
   });
 }
 
+function mergeWeight(weights = [], day, kg) {
+  return [...weights.filter((w) => w.day !== day), { day, kg }].sort((a, b) => (a.day < b.day ? -1 : 1));
+}
+const md = (d) => `${Number(d.slice(8))}/${Number(d.slice(5, 7))}`;
+
+function WeightChart({ weights }) {
+  const pts = weights.slice(-30);
+  if (pts.length < 2) return <p className="empty">บันทึกน้ำหนักอย่างน้อย 2 วันเพื่อดูกราฟ</p>;
+  const W = 320, H = 160, L = 36, R = 12, T = 12, B = 24;
+  const t = (d) => new Date(d).getTime();
+  const t0 = t(pts[0].day);
+  const t1 = t(pts[pts.length - 1].day);
+  const ks = pts.map((p) => p.kg);
+  let lo = Math.min(...ks);
+  let hi = Math.max(...ks);
+  if (hi - lo < 1) {
+    lo -= 0.5;
+    hi += 0.5;
+  }
+  const x = (d) => L + ((t(d) - t0) / (t1 - t0 || 1)) * (W - L - R);
+  const y = (k) => T + (1 - (k - lo) / (hi - lo)) * (H - T - B);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="กราฟน้ำหนัก" className="chart">
+      <line className="chart-grid" x1={L} x2={W - R} y1={y(hi)} y2={y(hi)} />
+      <line className="chart-grid" x1={L} x2={W - R} y1={y(lo)} y2={y(lo)} />
+      <text className="chart-txt" x={L - 6} y={y(hi) + 3} textAnchor="end">{hi.toFixed(1)}</text>
+      <text className="chart-txt" x={L - 6} y={y(lo) + 3} textAnchor="end">{lo.toFixed(1)}</text>
+      <polyline className="chart-line" points={pts.map((p) => `${x(p.day)},${y(p.kg)}`).join(" ")} />
+      {pts.map((p) => (
+        <circle key={p.day} className="chart-dot" cx={x(p.day)} cy={y(p.kg)} r="3.5" />
+      ))}
+      <text className="chart-txt" x={L} y={H - 6} textAnchor="start">{md(pts[0].day)}</text>
+      <text className="chart-txt" x={W - R} y={H - 6} textAnchor="end">{md(pts[pts.length - 1].day)}</text>
+    </svg>
+  );
+}
+
 function Bar({ label, value, target, unit }) {
   const pct = target ? Math.min(100, (value / target) * 100) : 0;
   return (
@@ -143,6 +180,9 @@ export default function Home() {
   const [view, setView] = useState(0); // 0 = วันนี้, -1 = เมื่อวาน
   const [backMeal, setBackMeal] = useState(1);
   const [edit, setEdit] = useState(null);
+  const [page, setPage] = useState("log");
+  const [wDay, setWDay] = useState("");
+  const [wKg, setWKg] = useState("");
 
   useEffect(() => {
     try {
@@ -150,6 +190,7 @@ export default function Home() {
       const p = JSON.parse(localStorage.getItem(PKEY) || "null");
       if (p) setProfile(p);
     } catch {}
+    setWDay(dayKey());
     setReady(true);
   }, []);
   useEffect(() => {
@@ -191,8 +232,9 @@ export default function Home() {
   function saveProfile() {
     if (!formOk) return;
     const weight = Number(form.weight);
-    const weights = profile?.weights?.length ? [...profile.weights] : [];
-    if (!weights.length || weights[weights.length - 1].kg !== weight) weights.push({ day: dayKey(), kg: weight });
+    const prev = profile?.weights || [];
+    const weights =
+      prev.length && prev[prev.length - 1].kg === weight ? prev : mergeWeight(prev, dayKey(), weight);
     setProfile({
       sex: form.sex,
       age: Number(form.age),
@@ -205,12 +247,28 @@ export default function Home() {
     setEditing(false);
   }
 
-  function updateWeight() {
-    const kg = Number(newWeight);
-    if (kg < 30 || kg > 250) return;
-    setProfile({ ...profile, weight: kg, weights: [...profile.weights, { day: dayKey(), kg }] });
-    setNewWeight("");
+  function logWeight(day, value) {
+    const kg = Math.round(Number(value) * 10) / 10;
+    if (!profile || !day || day > dayKey() || !(kg >= 30 && kg <= 250)) return false;
+    const weights = mergeWeight(profile.weights, day, kg);
+    setProfile({ ...profile, weight: weights[weights.length - 1].kg, weights });
+    return true;
   }
+
+  function removeWeight(day) {
+    const weights = profile.weights.filter((w) => w.day !== day);
+    if (!weights.length) return;
+    setProfile({ ...profile, weight: weights[weights.length - 1].kg, weights });
+  }
+
+  function updateWeight() {
+    if (logWeight(dayKey(), newWeight)) setNewWeight("");
+  }
+
+  const go = (p) => {
+    setPage(p);
+    window.scrollTo(0, 0);
+  };
 
   const setF = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
@@ -315,8 +373,102 @@ export default function Home() {
   ];
   const dayLabel = view === 0 ? "วันนี้" : "เมื่อวาน";
 
+  const ws = profile?.weights || [];
+  const first = ws[0];
+  const last = ws[ws.length - 1];
+  const change = first && last ? Math.round((last.kg - first.kg) * 10) / 10 : 0;
+  const byDay = {};
+  entries.forEach((e) => {
+    byDay[e.day] = (byDay[e.day] || 0) + e.calories;
+  });
+  let loggedDays = Object.keys(byDay).filter((d) => d !== dayKey());
+  if (!loggedDays.length) loggedDays = Object.keys(byDay);
+  const avgKcal = loggedDays.length
+    ? Math.round(loggedDays.reduce((s, d) => s + byDay[d], 0) / loggedDays.length)
+    : 0;
+
+  const progressView = !profile ? (
+    <section className="card">
+      <h2>ยังไม่มีข้อมูล</h2>
+      <p className="empty">ตั้งเป้าหมายแคลอรี่ในหน้าบันทึกก่อน แล้วค่อยกลับมาบันทึกน้ำหนักที่นี่</p>
+      <button className="primary" onClick={() => go("log")}>ไปหน้าบันทึก</button>
+    </section>
+  ) : (
+    <>
+      <div className="stats">
+        <div className="stat"><span>น้ำหนักปัจจุบัน</span><b>{last.kg} กก.</b></div>
+        <div className="stat"><span>น้ำหนักเริ่มต้น</span><b>{first.kg} กก.</b></div>
+        <div className="stat">
+          <span>เปลี่ยนไป</span>
+          <b>{change > 0 ? "+" : ""}{change} กก.</b>
+        </div>
+        <div className="stat">
+          <span>แคลอรี่เฉลี่ย/วัน</span>
+          <b>{avgKcal ? avgKcal : "-"}</b>
+          {avgKcal > 0 && <small>เป้าหมาย {goals.kcal} · {loggedDays.length} วัน</small>}
+        </div>
+      </div>
+
+      <section className="card">
+        <h2>บันทึกน้ำหนัก</h2>
+        <div className="wform">
+          <input type="date" value={wDay} max={dayKey()} onChange={(e) => setWDay(e.target.value)} aria-label="วันที่" />
+          <input
+            type="number"
+            inputMode="decimal"
+            value={wKg}
+            onChange={(e) => setWKg(e.target.value)}
+            placeholder="กก."
+            aria-label="น้ำหนัก (กก.)"
+          />
+        </div>
+        <button
+          className="primary"
+          disabled={!wKg}
+          onClick={() => {
+            if (logWeight(wDay, wKg)) setWKg("");
+          }}
+        >
+          บันทึกน้ำหนัก
+        </button>
+        <p className="hint">เลือกวันที่เดิมแล้วบันทึกซ้ำ จะเป็นการแก้ค่าของวันนั้น</p>
+      </section>
+
+      <section className="card">
+        <h2>กราฟน้ำหนัก</h2>
+        <WeightChart weights={ws} />
+      </section>
+
+      <section>
+        <h2>ประวัติน้ำหนัก</h2>
+        <ul className="wlist">
+          {[...ws].reverse().map((w, i, arr) => {
+            const prev = arr[i + 1];
+            const d = prev ? Math.round((w.kg - prev.kg) * 10) / 10 : null;
+            return (
+              <li key={w.day}>
+                <span className="time">{md(w.day)}</span>
+                <span className="name">{w.kg} กก.</span>
+                <span className="diff">{d === null ? "" : d > 0 ? `+${d}` : d}</span>
+                {ws.length > 1 ? (
+                  <button className="del" aria-label={`ลบน้ำหนักวันที่ ${md(w.day)}`} onClick={() => removeWeight(w.day)}>ลบ</button>
+                ) : (
+                  <span />
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    </>
+  );
+
   return (
     <main className="wrap">
+      {page === "progress" ? (
+        progressView
+      ) : (
+        <>
       {showSetup && (
         <section className="card">
           <h2>{profile ? "แก้ข้อมูลส่วนตัว" : "ตั้งเป้าหมายแคลอรี่"}</h2>
@@ -538,6 +690,17 @@ export default function Home() {
         )}
         {dayEntries.length > 0 && <p className="hint">แตะรายการเพื่อแก้ไข ปัดซ้ายเพื่อลบ</p>}
       </section>
+        </>
+      )}
+
+      <nav className="nav" aria-label="เมนูหลัก">
+        <button className={page === "log" ? "on" : ""} aria-current={page === "log"} onClick={() => go("log")}>
+          บันทึก
+        </button>
+        <button className={page === "progress" ? "on" : ""} aria-current={page === "progress"} onClick={() => go("progress")}>
+          ความคืบหน้า
+        </button>
+      </nav>
     </main>
   );
 }
