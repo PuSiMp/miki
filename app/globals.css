@@ -121,3 +121,30 @@ textarea, input, select { border-radius: 14px; }
 .wlist { list-style: none; margin: 0; padding: 0; border-top: 1px dashed var(--line); }
 .wlist li { display: grid; grid-template-columns: 48px 1fr auto auto; gap: 10px; align-items: center; padding: 12px 0; border-bottom: 1px dashed var(--line); }
 .diff { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* กันเนื้อหาล้นจอ / เลื่อนข้างไม่ได้ */
+html, body { overflow-x: hidden; }
+.wrap { grid-template-columns: minmax(0, 1fr); }
+.wrap > * { min-width: 0; }
+input, select, textarea { min-width: 0; }
+.grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.row, .row3, .actions, .quick, .wform, .grid2 { min-width: 0; }
+.list li.editli { grid-template-columns: minmax(0, 1fr); }
+.swipe-fg { grid-template-columns: 48px minmax(0, 1fr) auto; }
+.name { min-width: 0; overflow-wrap: anywhere; }
+.title { text-overflow: ellipsis; }
+.wlist li { grid-template-columns: 48px minmax(0, 1fr) auto auto; }
+.chev { color: var(--link); font-size: 12px; }
+
+.ro { display: grid; gap: 2px; text-align: center; background: var(--bg); border-radius: 12px; padding: 8px 4px; min-width: 0; }
+.ro span { font-size: 12px; color: var(--muted); }
+.ro b { font-size: 16px; font-variant-numeric: tabular-nums; }
+
+.ing { display: grid; gap: 8px; min-width: 0; }
+.ing-toggle { display: flex; justify-content: space-between; align-items: center; width: 100%; background: var(--bg); color: var(--ink); border-radius: 14px; padding: 10px 14px; }
+.ing-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ing-list li { display: grid; grid-template-columns: minmax(0, 1fr) 76px auto 62px; gap: 6px; align-items: center; }
+.ing-list input { padding: 8px 6px; text-align: center; }
+.ing-name { overflow-wrap: anywhere; font-size: 15px; }
+.ing-unit { color: var(--muted); font-size: 13px; }
+.ing-kcal { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }

@@ -72,6 +72,71 @@ function resize(file, max = 1024) {
   });
 }
 
+// วัตถุดิบเก็บเป็น "ต่อ 1 กรัม" เพื่อให้ปรับน้ำหนักแล้วคำนวณใหม่ได้
+const mkItem = (i) => {
+  const g = Math.max(1, Number(i.grams) || 1);
+  return {
+    name: String(i.name).slice(0, 60),
+    grams: g,
+    kc: (Number(i.calories) || 0) / g,
+    p: (Number(i.protein) || 0) / g,
+    c: (Number(i.carbs) || 0) / g,
+    f: (Number(i.fat) || 0) / g,
+  };
+};
+const sumItems = (items) => {
+  const t = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+  items.forEach((i) => {
+    const g = Number(i.grams) || 0;
+    t.calories += i.kc * g;
+    t.protein += i.p * g;
+    t.carbs += i.c * g;
+    t.fat += i.f * g;
+  });
+  return {
+    calories: Math.round(t.calories),
+    protein: Math.round(t.protein),
+    carbs: Math.round(t.carbs),
+    fat: Math.round(t.fat),
+  };
+};
+const cleanItems = (items) => (items?.length ? items.map((i) => ({ ...i, grams: Number(i.grams) || 0 })) : undefined);
+const setGrams = (obj, setObj) => (i, v) => {
+  const items = obj.items.map((it, j) => (j === i ? { ...it, grams: v === "" ? "" : Math.max(0, Number(v)) } : it));
+  setObj({ ...obj, items, ...sumItems(items) });
+};
+
+function Ingredients({ items, onGrams, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="ing">
+      <button type="button" className="ing-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>วัตถุดิบ ({items.length})</span>
+        <span>{open ? "▴" : "▾"}</span>
+      </button>
+      {open && (
+        <ul className="ing-list">
+          {items.map((it, i) => (
+            <li key={i}>
+              <span className="ing-name">{it.name}</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                value={it.grams}
+                onChange={(e) => onGrams(i, e.target.value)}
+                aria-label={`น้ำหนัก ${it.name}`}
+              />
+              <span className="ing-unit">ก.</span>
+              <span className="ing-kcal">{Math.round(it.kc * (Number(it.grams) || 0))} kcal</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function mergeWeight(weights = [], day, kg) {
   return [...weights.filter((w) => w.day !== day), { day, kg }].sort((a, b) => (a.day < b.day ? -1 : 1));
 }
@@ -299,7 +364,15 @@ export default function Home() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "เกิดข้อผิดพลาด");
-      setDraft({ name: data.name || text || "อาหาร", calories: data.calories, protein: data.protein, carbs: data.carbs, fat: data.fat });
+      const items = (data.ingredients || []).map(mkItem);
+      setDraft({
+        name: data.name || text || "อาหาร",
+        calories: data.calories,
+        protein: data.protein,
+        carbs: data.carbs,
+        fat: data.fat,
+        ...(items.length ? { items, ...sumItems(items) } : {}),
+      });
     } catch (e) {
       setError(e.message || "เกิดข้อผิดพลาด");
     }
@@ -323,6 +396,7 @@ export default function Home() {
         protein: num(d.protein),
         carbs: num(d.carbs),
         fat: num(d.fat),
+        items: cleanItems(d.items),
       },
     ]);
   }
@@ -351,6 +425,7 @@ export default function Home() {
               protein: num(edit.protein),
               carbs: num(edit.carbs),
               fat: num(edit.fat),
+              items: cleanItems(edit.items),
             }
           : x
       )
@@ -565,14 +640,28 @@ export default function Home() {
       {draft && (
         <section className="card">
           <input className="title" value={draft.name} onChange={editD("name")} aria-label="ชื่ออาหาร" />
-          <div className="grid">
-            {FIELDS.map(([k, label]) => (
-              <label key={k}>
-                <span>{label}</span>
-                <input type="number" inputMode="numeric" value={draft[k]} onChange={editD(k)} />
-              </label>
-            ))}
-          </div>
+          {draft.items?.length ? (
+            <>
+              <div className="grid">
+                {FIELDS.map(([k, label]) => (
+                  <div className="ro" key={k}>
+                    <span>{label}</span>
+                    <b>{draft[k]}</b>
+                  </div>
+                ))}
+              </div>
+              <Ingredients items={draft.items} onGrams={setGrams(draft, setDraft)} />
+            </>
+          ) : (
+            <div className="grid">
+              {FIELDS.map(([k, label]) => (
+                <label key={k}>
+                  <span>{label}</span>
+                  <input type="number" inputMode="numeric" value={draft[k]} onChange={editD(k)} />
+                </label>
+              ))}
+            </div>
+          )}
           <div className="row">
             <button className="ghost" onClick={() => setDraft(null)}>ยกเลิก</button>
             <button className="primary" onClick={confirmDraft}>บันทึก</button>
@@ -661,14 +750,28 @@ export default function Home() {
                     edit?.id === e.id ? (
                       <li key={e.id} className="editli">
                         <input className="title" value={edit.name} onChange={editE("name")} aria-label="ชื่ออาหาร" />
-                        <div className="grid">
-                          {FIELDS.map(([k, l]) => (
-                            <label key={k}>
-                              <span>{l}</span>
-                              <input type="number" inputMode="numeric" value={edit[k]} onChange={editE(k)} />
-                            </label>
-                          ))}
-                        </div>
+                        {edit.items?.length ? (
+                          <>
+                            <div className="grid">
+                              {FIELDS.map(([k, l]) => (
+                                <div className="ro" key={k}>
+                                  <span>{l}</span>
+                                  <b>{edit[k]}</b>
+                                </div>
+                              ))}
+                            </div>
+                            <Ingredients items={edit.items} onGrams={setGrams(edit, setEdit)} defaultOpen />
+                          </>
+                        ) : (
+                          <div className="grid">
+                            {FIELDS.map(([k, l]) => (
+                              <label key={k}>
+                                <span>{l}</span>
+                                <input type="number" inputMode="numeric" value={edit[k]} onChange={editE(k)} />
+                              </label>
+                            ))}
+                          </div>
+                        )}
                         <div className="row3">
                           <button className="ghost" onClick={() => remove(e.id)}>ลบ</button>
                           <button className="ghost" onClick={() => setEdit(null)}>ยกเลิก</button>
@@ -678,7 +781,10 @@ export default function Home() {
                     ) : (
                       <SwipeRow key={e.id} onDelete={() => remove(e.id)} onTap={() => setEdit({ ...e })}>
                         <span className="time">{timeOf(e.ts)}</span>
-                        <span className="name">{e.name}</span>
+                        <span className="name">
+                          {e.name}
+                          {e.items?.length ? <span className="chev"> ▾</span> : null}
+                        </span>
                         <span className="cal">{e.calories}</span>
                       </SwipeRow>
                     )

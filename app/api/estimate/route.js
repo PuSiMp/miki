@@ -28,7 +28,10 @@ export async function POST(req) {
   const prompt =
     "ประเมินโภชนาการของอาหารที่กินในมื้อนี้ รวมทุกรายการเป็นผลรวมเดียว " +
     "ถ้าไม่ระบุปริมาณ ให้ใช้ปริมาณเสิร์ฟทั่วไป (อาหารไทยใช้ขนาดจานปกติ) " +
-    "ตอบเป็น JSON เท่านั้น: name = ชื่อสั้นๆ ภาษาไทย, calories = kcal, protein/carbs/fat = กรัม ทั้งหมดเป็นจำนวนเต็ม" +
+    "แยกเป็นวัตถุดิบหลักไม่เกิน 10 รายการ (เช่น กะเพราหมูสับ: หมูสับ, ข้าวสวย, ไข่ดาว, น้ำมัน, ใบกะเพรา+พริก) " +
+    "ระบุน้ำหนักที่กินจริงเป็นกรัม (เครื่องดื่มใช้ มล. แทนเป็นตัวเลขเดียวกัน) พร้อมแคลอรี่และสารอาหารของแต่ละรายการ " +
+    "ถ้าผู้ใช้ระบุน้ำหนักหรือปริมาณของวัตถุดิบ ให้ใช้ตามนั้น " +
+    "ตอบเป็น JSON เท่านั้น: name = ชื่อเมนูสั้นๆ ภาษาไทย, calories = kcal รวม, protein/carbs/fat = กรัมรวม ซึ่งต้องเท่ากับผลรวมของวัตถุดิบ ทั้งหมดเป็นจำนวนเต็ม" +
     (hasImage ? "\n\nดูอาหารจากรูปที่แนบ ประเมินปริมาณจากขนาดจานและสัดส่วนที่เห็น" : "") +
     (text ? "\n\nอาหาร: " + text : "");
 
@@ -51,8 +54,23 @@ export async function POST(req) {
           protein: { type: "INTEGER" },
           carbs: { type: "INTEGER" },
           fat: { type: "INTEGER" },
+          ingredients: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                name: { type: "STRING" },
+                grams: { type: "INTEGER" },
+                calories: { type: "INTEGER" },
+                protein: { type: "INTEGER" },
+                carbs: { type: "INTEGER" },
+                fat: { type: "INTEGER" },
+              },
+              required: ["name", "grams", "calories", "protein", "carbs", "fat"],
+            },
+          },
         },
-        required: ["name", "calories", "protein", "carbs", "fat"],
+        required: ["name", "calories", "protein", "carbs", "fat", "ingredients"],
       },
     },
   });
@@ -85,7 +103,19 @@ export async function POST(req) {
         const why = data?.promptFeedback?.blockReason || data?.candidates?.[0]?.finishReason || "ไม่มีผลลัพธ์";
         return Response.json({ error: `AI ไม่ตอบกลับ (${why}) ลองพิมพ์ให้ละเอียดขึ้น` }, { status: 502 });
       }
-      return Response.json(JSON.parse(raw));
+      const out = JSON.parse(raw);
+      const ing = (Array.isArray(out.ingredients) ? out.ingredients : [])
+        .filter((i) => i && i.name && Number(i.grams) > 0)
+        .slice(0, 12);
+      out.ingredients = ing;
+      if (ing.length) {
+        const add = (k) => Math.round(ing.reduce((s, i) => s + (Number(i[k]) || 0), 0));
+        out.calories = add("calories");
+        out.protein = add("protein");
+        out.carbs = add("carbs");
+        out.fat = add("fat");
+      }
+      return Response.json(out);
     } catch (e) {
       return Response.json({ error: "อ่านผลจาก AI ไม่ได้: " + String(e?.message || e).slice(0, 120) }, { status: 502 });
     }
