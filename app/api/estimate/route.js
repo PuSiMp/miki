@@ -1,3 +1,7 @@
+// ลองโมเดลตามลำดับ ถ้ารุ่นไหนถูกปิด (404) หรือโควตาเต็ม (429) จะข้ามไปรุ่นถัดไป
+// ตั้ง GEMINI_MODEL เพื่อบังคับใช้รุ่นเดียว (คั่นด้วยคอมมาได้ถ้าอยากกำหนดลำดับเอง)
+const DEFAULT_MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"];
+
 export async function POST(req) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return Response.json({ error: "ยังไม่ได้ตั้งค่า GEMINI_API_KEY" }, { status: 500 });
@@ -17,7 +21,10 @@ export async function POST(req) {
     return Response.json({ error: "พิมพ์รายการอาหารหรือแนบรูปก่อน" }, { status: 400 });
   }
 
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const models = process.env.GEMINI_MODEL
+    ? process.env.GEMINI_MODEL.split(",").map((m) => m.trim()).filter(Boolean)
+    : DEFAULT_MODELS;
+
   const prompt =
     "ประเมินโภชนาการของอาหารที่กินในมื้อนี้ รวมทุกรายการเป็นผลรวมเดียว " +
     "ถ้าไม่ระบุปริมาณ ให้ใช้ปริมาณเสิร์ฟทั่วไป (อาหารไทยใช้ขนาดจานปกติ) " +
@@ -25,46 +32,70 @@ export async function POST(req) {
     (hasImage ? "\n\nดูอาหารจากรูปที่แนบ ประเมินปริมาณจากขนาดจานและสัดส่วนที่เห็น" : "") +
     (text ? "\n\nอาหาร: " + text : "");
 
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+  const body = JSON.stringify({
+    contents: [
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: prompt },
-                ...(hasImage ? [{ inlineData: { mimeType: image.mimeType, data: image.data } }] : []),
-              ],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: "OBJECT",
-              properties: {
-                name: { type: "STRING" },
-                calories: { type: "INTEGER" },
-                protein: { type: "INTEGER" },
-                carbs: { type: "INTEGER" },
-                fat: { type: "INTEGER" },
-              },
-              required: ["name", "calories", "protein", "carbs", "fat"],
-            },
-          },
-        }),
+        parts: [
+          { text: prompt },
+          ...(hasImage ? [{ inlineData: { mimeType: image.mimeType, data: image.data } }] : []),
+        ],
+      },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING" },
+          calories: { type: "INTEGER" },
+          protein: { type: "INTEGER" },
+          carbs: { type: "INTEGER" },
+          fat: { type: "INTEGER" },
+        },
+        required: ["name", "calories", "protein", "carbs", "fat"],
+      },
+    },
+  });
+
+  const statuses = [];
+  for (const model of models) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body }
+      );
+      if (res.status === 404 || res.status === 429) {
+        statuses.push(model + ":" + res.status);
+        continue;
       }
-    );
-    if (!res.ok) {
-      const msg = res.status === 429 ? "เรียก AI ถี่เกินโควตาฟรี รอสักครู่แล้วลองใหม่" : "เรียก Gemini ไม่สำเร็จ (" + res.status + ")";
-      return Response.json({ error: msg }, { status: 502 });
+      if (!res.ok) {
+        let msg = "";
+        try {
+          msg = (await res.json())?.error?.message || "";
+        } catch {}
+        return Response.json(
+          { error: `เรียก Gemini ไม่สำเร็จ (${model} ${res.status}) ${msg}`.trim().slice(0, 300) },
+          { status: 502 }
+        );
+      }
+      const data = await res.json();
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+      const raw = parts.filter((p) => !p.thought).map((p) => p.text || "").join("");
+      if (!raw) {
+        const why = data?.promptFeedback?.blockReason || data?.candidates?.[0]?.finishReason || "ไม่มีผลลัพธ์";
+        return Response.json({ error: `AI ไม่ตอบกลับ (${why}) ลองพิมพ์ให้ละเอียดขึ้น` }, { status: 502 });
+      }
+      return Response.json(JSON.parse(raw));
+    } catch (e) {
+      return Response.json({ error: "อ่านผลจาก AI ไม่ได้: " + String(e?.message || e).slice(0, 120) }, { status: 502 });
     }
-    const data = await res.json();
-    const out = JSON.parse(data.candidates[0].content.parts[0].text);
-    return Response.json(out);
-  } catch {
-    return Response.json({ error: "อ่านผลจาก AI ไม่ได้ ลองใหม่อีกครั้ง" }, { status: 502 });
   }
+
+  const all404 = statuses.every((s) => s.endsWith(":404"));
+  const error =
+    (all404
+      ? "ไม่พบโมเดล Gemini ที่ใช้ได้ ดูชื่อรุ่นใน Google AI Studio แล้วตั้งค่า GEMINI_MODEL ใน Vercel"
+      : "โควตาฟรีเต็มหรือโมเดลไม่พร้อมใช้ รอสักพักแล้วลองใหม่") +
+    ` [${statuses.join(", ")}]`;
+  return Response.json({ error }, { status: 502 });
 }
