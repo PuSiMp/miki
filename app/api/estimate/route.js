@@ -64,7 +64,7 @@ export async function POST(req) {
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body }
       );
-      if (res.status === 404 || res.status === 429) {
+      if ([404, 429, 500, 503, 504].includes(res.status)) {
         statuses.push(model + ":" + res.status);
         continue;
       }
@@ -95,7 +95,9 @@ export async function POST(req) {
   const error =
     (all404
       ? "ไม่พบโมเดล Gemini ที่ใช้ได้ ดูชื่อรุ่นใน Google AI Studio แล้วตั้งค่า GEMINI_MODEL ใน Vercel"
-      : "โควตาฟรีเต็มหรือโมเดลไม่พร้อมใช้ รอสักพักแล้วลองใหม่") +
+      : statuses.some((x) => /:(500|503|504)$/.test(x))
+        ? "Gemini กำลังมีคนใช้งานเยอะ ลองกดใหม่อีกครั้งในอีกสักครู่"
+        : "โควตาฟรีเต็มหรือโมเดลไม่พร้อมใช้ รอสักพักแล้วลองใหม่") +
     ` [${statuses.join(", ")}]`;
   return Response.json({ error }, { status: 502 });
 }
