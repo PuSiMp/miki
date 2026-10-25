@@ -89,3 +89,15 @@ textarea, input, select { border-radius: 14px; }
 .bar > div { border-radius: 999px; }
 .list li { border-bottom-style: dashed; }
 .list { border-top-style: dashed; }
+
+.tabs { display: grid; grid-template-columns: 1fr 1fr; background: var(--line); border-radius: 999px; padding: 4px; }
+.tabs button { background: transparent; color: var(--muted); padding: 8px; }
+.tabs button.on { background: var(--panel); color: var(--ink); font-weight: 700; box-shadow: var(--shadow); }
+.field.inline { grid-template-columns: auto 1fr; align-items: center; gap: 10px; }
+.meal { display: flex; justify-content: space-between; font-size: 14px; font-weight: 500; color: var(--link); margin: 14px 0 6px; }
+.list li.swipe { display: block; padding: 0; position: relative; overflow: hidden; touch-action: pan-y; }
+.swipe-bg { position: absolute; inset: 0; background: var(--err); color: var(--ink); font-weight: 700; display: flex; align-items: center; justify-content: flex-end; padding-right: 18px; }
+.swipe-fg { position: relative; display: grid; grid-template-columns: 48px 1fr auto; gap: 10px; align-items: center; padding: 12px 0; background: var(--bg); cursor: pointer; }
+.list li.editli { display: grid; gap: 10px; padding: 12px 0; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 8px; }
+.hint { margin: 10px 0 0; font-size: 13px; color: var(--muted); }

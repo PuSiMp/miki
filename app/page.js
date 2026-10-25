@@ -17,6 +17,28 @@ const GOALS = [
   ["gain", "เพิ่มน้ำหนัก"],
 ];
 
+// ตัดรอบวันตอนตี 4: กินตอนตี 1 นับเป็นของเมื่อวาน
+const CUTOFF = 4;
+const MEALS = [
+  ["เช้า", 8],
+  ["เที่ยง", 12],
+  ["เย็น", 18],
+  ["มื้อดึก", 23],
+];
+const pad = (n) => String(n).padStart(2, "0");
+const shifted = (d) => new Date(d.getTime() - CUTOFF * 3600000);
+const keyOf = (s) => `${s.getFullYear()}-${pad(s.getMonth() + 1)}-${pad(s.getDate())}`;
+const dayKey = (d = new Date()) => keyOf(shifted(d));
+const mealOf = (ts) => {
+  const h = (new Date(ts).getHours() - CUTOFF + 24) % 24;
+  return h < 7 ? 0 : h < 12 ? 1 : h < 18 ? 2 : 3;
+};
+const num = (v) => Math.max(0, Math.round(Number(v) || 0));
+const timeOf = (ts) => {
+  const d = new Date(ts);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 // Mifflin-St Jeor -> BMR -> TDEE -> เป้าหมายแคลอรี่และ macros
 function calc(p) {
   const bmr = 10 * p.weight + 6.25 * p.height - 5 * p.age + (p.sex === "male" ? 5 : -161);
@@ -28,30 +50,6 @@ function calc(p) {
   const carbs = Math.max(0, Math.round((kcal - protein * 4 - fat * 9) / 4));
   return { bmr: Math.round(bmr), tdee: Math.round(tdee), kcal, protein, carbs, fat };
 }
-
-function Bar({ label, value, target, unit }) {
-  const pct = target ? Math.min(100, (value / target) * 100) : 0;
-  return (
-    <div className="bar-row">
-      <div className="bar-head">
-        <span>{label}</span>
-        <span>
-          {value} / {target} {unit}
-        </span>
-      </div>
-      <div className={"bar" + (value > target ? " over" : "")}>
-        <div style={{ width: pct + "%" }} />
-      </div>
-    </div>
-  );
-}
-const pad = (n) => String(n).padStart(2, "0");
-const dayKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const num = (v) => Math.max(0, Math.round(Number(v) || 0));
-const timeOf = (ts) => {
-  const d = new Date(ts);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
 
 function resize(file, max = 1024) {
   return new Promise((resolve, reject) => {
@@ -74,6 +72,60 @@ function resize(file, max = 1024) {
   });
 }
 
+function Bar({ label, value, target, unit }) {
+  const pct = target ? Math.min(100, (value / target) * 100) : 0;
+  return (
+    <div className="bar-row">
+      <div className="bar-head">
+        <span>{label}</span>
+        <span>
+          {value} / {target} {unit}
+        </span>
+      </div>
+      <div className={"bar" + (value > target ? " over" : "")}>
+        <div style={{ width: pct + "%" }} />
+      </div>
+    </div>
+  );
+}
+
+// แตะเพื่อแก้ไข ปัดซ้ายเพื่อลบ
+function SwipeRow({ onDelete, onTap, children }) {
+  const [dx, setDx] = useState(0);
+  const [drag, setDrag] = useState(false);
+  const startX = useRef(0);
+  const moved = useRef(false);
+  return (
+    <li className="swipe">
+      <div className="swipe-bg">ลบ</div>
+      <div
+        className="swipe-fg"
+        style={{ transform: `translateX(${dx}px)`, transition: drag ? "none" : "transform 0.15s" }}
+        onTouchStart={(e) => {
+          startX.current = e.touches[0].clientX;
+          moved.current = false;
+          setDrag(true);
+        }}
+        onTouchMove={(e) => {
+          const d = e.touches[0].clientX - startX.current;
+          if (Math.abs(d) > 8) moved.current = true;
+          setDx(Math.min(0, Math.max(-120, d)));
+        }}
+        onTouchEnd={() => {
+          setDrag(false);
+          if (dx < -80) onDelete();
+          else setDx(0);
+        }}
+        onClick={() => {
+          if (!moved.current) onTap();
+        }}
+      >
+        {children}
+      </div>
+    </li>
+  );
+}
+
 export default function Home() {
   const [entries, setEntries] = useState([]);
   const [ready, setReady] = useState(false);
@@ -88,6 +140,9 @@ export default function Home() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ sex: "male", age: "", weight: "", height: "", activity: "1.375", goal: "lose" });
   const [newWeight, setNewWeight] = useState("");
+  const [view, setView] = useState(0); // 0 = วันนี้, -1 = เมื่อวาน
+  const [backMeal, setBackMeal] = useState(1);
+  const [edit, setEdit] = useState(null);
 
   useEffect(() => {
     try {
@@ -105,8 +160,10 @@ export default function Home() {
     } catch {}
   }, [entries, profile, ready]);
 
-  const today = entries.filter((e) => e.day === dayKey()).sort((a, b) => a.ts - b.ts);
-  const sum = (k) => today.reduce((s, e) => s + e[k], 0);
+  const yesterdayShifted = () => new Date(Date.now() - 86400000 - CUTOFF * 3600000);
+  const viewDay = view === 0 ? dayKey() : keyOf(yesterdayShifted());
+  const dayEntries = entries.filter((e) => e.day === viewDay).sort((a, b) => a.ts - b.ts);
+  const sum = (k) => dayEntries.reduce((s, e) => s + e[k], 0);
 
   const goals = profile ? calc(profile) : null;
   const lastW = profile?.weights?.[profile.weights.length - 1];
@@ -192,12 +249,17 @@ export default function Home() {
   }
 
   function save(d) {
+    let ts = Date.now();
+    if (view === -1) {
+      const y = yesterdayShifted();
+      ts = new Date(y.getFullYear(), y.getMonth(), y.getDate(), MEALS[backMeal][1], 0).getTime();
+    }
     setEntries((p) => [
       ...p,
       {
         id: Date.now() + "-" + Math.random().toString(36).slice(2, 7),
-        ts: Date.now(),
-        day: dayKey(),
+        ts,
+        day: viewDay,
         name: d.name || "อาหาร",
         calories: num(d.calories),
         protein: num(d.protein),
@@ -220,38 +282,41 @@ export default function Home() {
     setQuick("");
   }
 
-  const edit = (k) => (e) => setDraft({ ...draft, [k]: e.target.value });
+  function saveEdit() {
+    setEntries((p) =>
+      p.map((x) =>
+        x.id === edit.id
+          ? {
+              ...x,
+              name: edit.name || "อาหาร",
+              calories: num(edit.calories),
+              protein: num(edit.protein),
+              carbs: num(edit.carbs),
+              fat: num(edit.fat),
+            }
+          : x
+      )
+    );
+    setEdit(null);
+  }
+
+  const remove = (id) => {
+    setEntries((p) => p.filter((x) => x.id !== id));
+    setEdit(null);
+  };
+  const editD = (k) => (e) => setDraft({ ...draft, [k]: e.target.value });
+  const editE = (k) => (e) => setEdit({ ...edit, [k]: e.target.value });
+
+  const FIELDS = [
+    ["calories", "kcal"],
+    ["protein", "โปรตีน"],
+    ["carbs", "คาร์บ"],
+    ["fat", "ไขมัน"],
+  ];
+  const dayLabel = view === 0 ? "วันนี้" : "เมื่อวาน";
 
   return (
     <main className="wrap">
-      <header className="total">
-        <div className="kcal">{sum("calories")}</div>
-        <div className="unit">
-          {goals ? (
-            <>
-              จากเป้าหมาย {goals.kcal} kcal ·{" "}
-              {sum("calories") > goals.kcal
-                ? `เกิน ${sum("calories") - goals.kcal}`
-                : `เหลือ ${goals.kcal - sum("calories")}`}
-            </>
-          ) : (
-            "kcal วันนี้"
-          )}
-        </div>
-        {goals ? (
-          <div className="bars">
-            <Bar label="พลังงาน" value={sum("calories")} target={goals.kcal} unit="kcal" />
-            <Bar label="โปรตีน" value={sum("protein")} target={goals.protein} unit="ก." />
-            <Bar label="คาร์บ" value={sum("carbs")} target={goals.carbs} unit="ก." />
-            <Bar label="ไขมัน" value={sum("fat")} target={goals.fat} unit="ก." />
-          </div>
-        ) : (
-          <div className="macros">
-            โปรตีน {sum("protein")} ก. · คาร์บ {sum("carbs")} ก. · ไขมัน {sum("fat")} ก.
-          </div>
-        )}
-      </header>
-
       {showSetup && (
         <section className="card">
           <h2>{profile ? "แก้ข้อมูลส่วนตัว" : "ตั้งเป้าหมายแคลอรี่"}</h2>
@@ -301,27 +366,30 @@ export default function Home() {
         </section>
       )}
 
-      {profile && !editing && weightDue && (
-        <section className="card">
-          <strong>ถึงเวลาอัปเดตน้ำหนักประจำสัปดาห์</strong>
-          <div className="quick">
-            <input
-              type="number"
-              inputMode="decimal"
-              value={newWeight}
-              onChange={(e) => setNewWeight(e.target.value)}
-              placeholder={`น้ำหนักตอนนี้ (ครั้งก่อน ${lastW.kg} กก.)`}
-            />
-            <button className="primary" onClick={updateWeight} disabled={!newWeight}>อัปเดต</button>
-          </div>
-        </section>
-      )}
+      <div className="tabs" role="tablist">
+        <button role="tab" aria-selected={view === -1} className={view === -1 ? "on" : ""} onClick={() => { setView(-1); setEdit(null); }}>
+          เมื่อวาน
+        </button>
+        <button role="tab" aria-selected={view === 0} className={view === 0 ? "on" : ""} onClick={() => { setView(0); setEdit(null); }}>
+          วันนี้
+        </button>
+      </div>
 
       <section className="box">
+        {view === -1 && (
+          <label className="field inline">
+            <span>บันทึกย้อนหลังเป็นมื้อ</span>
+            <select value={backMeal} onChange={(e) => setBackMeal(Number(e.target.value))}>
+              {MEALS.map(([l], i) => (
+                <option key={l} value={i}>{l}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="วันนี้กินอะไร เช่น ไก่ทอด KFC 3 ชิ้น"
+          placeholder="กินอะไรไป เช่น ไก่ทอด KFC 3 ชิ้น"
           rows={3}
         />
         {image && (
@@ -344,17 +412,12 @@ export default function Home() {
 
       {draft && (
         <section className="card">
-          <input className="title" value={draft.name} onChange={edit("name")} aria-label="ชื่ออาหาร" />
+          <input className="title" value={draft.name} onChange={editD("name")} aria-label="ชื่ออาหาร" />
           <div className="grid">
-            {[
-              ["calories", "kcal"],
-              ["protein", "โปรตีน"],
-              ["carbs", "คาร์บ"],
-              ["fat", "ไขมัน"],
-            ].map(([k, label]) => (
+            {FIELDS.map(([k, label]) => (
               <label key={k}>
                 <span>{label}</span>
-                <input type="number" inputMode="numeric" value={draft[k]} onChange={edit(k)} />
+                <input type="number" inputMode="numeric" value={draft[k]} onChange={editD(k)} />
               </label>
             ))}
           </div>
@@ -376,6 +439,50 @@ export default function Home() {
         <button className="ghost" onClick={quickAdd} disabled={!num(quick)}>เพิ่ม</button>
       </section>
 
+      <header className="total">
+        <div className="kcal">{sum("calories")}</div>
+        <div className="unit">
+          {goals ? (
+            <>
+              {dayLabel} · เป้าหมาย {goals.kcal} kcal ·{" "}
+              {sum("calories") > goals.kcal
+                ? `เกิน ${sum("calories") - goals.kcal}`
+                : `เหลือ ${goals.kcal - sum("calories")}`}
+            </>
+          ) : (
+            `kcal ${dayLabel}`
+          )}
+        </div>
+        {goals ? (
+          <div className="bars">
+            <Bar label="พลังงาน" value={sum("calories")} target={goals.kcal} unit="kcal" />
+            <Bar label="โปรตีน" value={sum("protein")} target={goals.protein} unit="ก." />
+            <Bar label="คาร์บ" value={sum("carbs")} target={goals.carbs} unit="ก." />
+            <Bar label="ไขมัน" value={sum("fat")} target={goals.fat} unit="ก." />
+          </div>
+        ) : (
+          <div className="macros">
+            โปรตีน {sum("protein")} ก. · คาร์บ {sum("carbs")} ก. · ไขมัน {sum("fat")} ก.
+          </div>
+        )}
+      </header>
+
+      {profile && !editing && weightDue && (
+        <section className="card">
+          <strong>ถึงเวลาอัปเดตน้ำหนักประจำสัปดาห์</strong>
+          <div className="quick">
+            <input
+              type="number"
+              inputMode="decimal"
+              value={newWeight}
+              onChange={(e) => setNewWeight(e.target.value)}
+              placeholder={`น้ำหนักตอนนี้ (ครั้งก่อน ${lastW.kg} กก.)`}
+            />
+            <button className="primary" onClick={updateWeight} disabled={!newWeight}>อัปเดต</button>
+          </div>
+        </section>
+      )}
+
       {goals && !editing && (
         <p className="meta">
           BMR {goals.bmr} · TDEE {goals.tdee} kcal ·{" "}
@@ -384,27 +491,52 @@ export default function Home() {
       )}
 
       <section>
-        <h2>บันทึกวันนี้</h2>
-        {today.length === 0 ? (
-          <p className="empty">🍙 ยังไม่มีรายการ พิมพ์อาหารมื้อแรกด้านบนได้เลย</p>
+        <h2>บันทึก{dayLabel}</h2>
+        {dayEntries.length === 0 ? (
+          <p className="empty">🍙 ยังไม่มีรายการ พิมพ์อาหารด้านบนได้เลย</p>
         ) : (
-          <ul className="list">
-            {today.map((e) => (
-              <li key={e.id}>
-                <span className="time">{timeOf(e.ts)}</span>
-                <span className="name">{e.name}</span>
-                <span className="cal">{e.calories}</span>
-                <button
-                  className="del"
-                  aria-label={`ลบ ${e.name}`}
-                  onClick={() => setEntries((p) => p.filter((x) => x.id !== e.id))}
-                >
-                  ลบ
-                </button>
-              </li>
-            ))}
-          </ul>
+          MEALS.map(([label], mi) => {
+            const items = dayEntries.filter((e) => mealOf(e.ts) === mi);
+            if (!items.length) return null;
+            return (
+              <div key={label}>
+                <h3 className="meal">
+                  <span>{label}</span>
+                  <span>{items.reduce((s, e) => s + e.calories, 0)} kcal</span>
+                </h3>
+                <ul className="list">
+                  {items.map((e) =>
+                    edit?.id === e.id ? (
+                      <li key={e.id} className="editli">
+                        <input className="title" value={edit.name} onChange={editE("name")} aria-label="ชื่ออาหาร" />
+                        <div className="grid">
+                          {FIELDS.map(([k, l]) => (
+                            <label key={k}>
+                              <span>{l}</span>
+                              <input type="number" inputMode="numeric" value={edit[k]} onChange={editE(k)} />
+                            </label>
+                          ))}
+                        </div>
+                        <div className="row3">
+                          <button className="ghost" onClick={() => remove(e.id)}>ลบ</button>
+                          <button className="ghost" onClick={() => setEdit(null)}>ยกเลิก</button>
+                          <button className="primary" onClick={saveEdit}>บันทึก</button>
+                        </div>
+                      </li>
+                    ) : (
+                      <SwipeRow key={e.id} onDelete={() => remove(e.id)} onTap={() => setEdit({ ...e })}>
+                        <span className="time">{timeOf(e.ts)}</span>
+                        <span className="name">{e.name}</span>
+                        <span className="cal">{e.calories}</span>
+                      </SwipeRow>
+                    )
+                  )}
+                </ul>
+              </div>
+            );
+          })
         )}
+        {dayEntries.length > 0 && <p className="hint">แตะรายการเพื่อแก้ไข ปัดซ้ายเพื่อลบ</p>}
       </section>
     </main>
   );
