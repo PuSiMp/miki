@@ -23,9 +23,9 @@ const ACTIVITY = [
   ["1.9", "หนักมาก หรือทำงานใช้แรง"],
 ];
 const GOALS = [
-  ["lose", "ลดน้ำหนัก"],
+  ["lose", "ลดน้ำหนัก (กินน้อยกว่าที่ใช้ ~500 kcal/วัน)"],
   ["maintain", "รักษาน้ำหนัก"],
-  ["gain", "เพิ่มน้ำหนัก"],
+  ["gain", "เพิ่มน้ำหนัก (กินมากกว่าที่ใช้ ~300 kcal/วัน)"],
 ];
 
 // ตัดรอบวันตอนตี 4: กินตอนตี 1 นับเป็นของเมื่อวาน
@@ -718,6 +718,7 @@ export default function Home() {
       {showSetup && (
         <section className="card">
           <h2>{profile ? "แก้ข้อมูลส่วนตัว" : "ตั้งเป้าหมายแคลอรี่"}</h2>
+          <p className="hint">กรอกข้อมูลของคุณ แอปจะคำนวณแคลอรี่และสารอาหารที่ควรกินต่อวันให้ แก้ภายหลังได้</p>
           <div className="grid2">
             <label>
               <span>เพศ</span>
@@ -764,6 +765,18 @@ export default function Home() {
         </section>
       )}
 
+      {ready && entries.length === 0 && !showSetup && page === "log" && (
+        <section className="card">
+          <h2>เริ่มต้นใช้งาน</h2>
+          <ol className="steps">
+            <li>พิมพ์หรือถ่ายรูปอาหารที่กิน</li>
+            <li>กด “คำนวณแคลอรี่” แล้วตรวจตัวเลข</li>
+            <li>กด “บันทึก” แล้วดูสรุปของวันด้านล่าง</li>
+          </ol>
+          <p className="hint">เคยจดใน Excel? ไปแท็บ “ปฏิทิน” เพื่อนำเข้าข้อมูลเดิมได้เลย</p>
+        </section>
+      )}
+
       <div className="daynav">
         <button className="ghost" aria-label="วันก่อนหน้า" onClick={() => shiftDay(-1)}>‹</button>
         <div className="dayc">
@@ -790,6 +803,8 @@ export default function Home() {
       )}
 
       <section className="box">
+        <details key={viewDay === dayKey() ? "t" : "o"} className="more" open={viewDay !== dayKey()}>
+          <summary>ตั้งเวลา / มื้อ (ไม่บังคับ)</summary>
         <div className="when">
           <label>
             <span>เวลา (เว้นว่าง = {viewDay === dayKey() ? "ตอนนี้" : "12:00"})</span>
@@ -805,10 +820,11 @@ export default function Home() {
             </select>
           </label>
         </div>
+        </details>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="กินอะไรไป เช่น ไก่ทอด KFC 3 ชิ้น"
+          placeholder="พิมพ์สิ่งที่กิน เช่น ไก่ทอด KFC 3 ชิ้น หรือกด “แนบรูป”"
           rows={3}
         />
         {image && (
@@ -831,6 +847,7 @@ export default function Home() {
 
       {draft && (
         <section className="card">
+          <p className="hint">AI ประเมินคร่าวๆ ตรวจและแก้ตัวเลขก่อนกดบันทึกได้</p>
           <input className="title" value={draft.name} onChange={editD("name")} aria-label="ชื่ออาหาร" />
           {draft.items?.length ? (
             <>
@@ -867,7 +884,7 @@ export default function Home() {
           inputMode="numeric"
           value={quick}
           onChange={(e) => setQuick(e.target.value)}
-          placeholder="กรอก kcal จากฉลากโดยตรง"
+          placeholder="รู้แคลอรี่อยู่แล้ว? กรอกตัวเลข (kcal) ตรงนี้"
         />
         <button className="ghost" onClick={quickAdd} disabled={!num(quick)}>เพิ่ม</button>
       </section>
@@ -902,7 +919,8 @@ export default function Home() {
 
       {profile && !editing && weightDue && (
         <section className="card">
-          <strong>ถึงเวลาอัปเดตน้ำหนักประจำสัปดาห์</strong>
+          <strong>อัปเดตน้ำหนักประจำสัปดาห์</strong>
+          <p className="hint">ช่วยให้แอปปรับเป้าหมายให้เหมาะกับตัวคุณ</p>
           <div className="quick">
             <input
               type="number"
@@ -918,7 +936,7 @@ export default function Home() {
 
       {goals && !editing && (
         <p className="meta">
-          {goals.custom ? "เป้าหมายตั้งเอง (จาก Excel)" : `BMR ${goals.bmr} · TDEE ${goals.tdee} kcal`} ·{" "}
+          {goals.custom ? "เป้าหมายตั้งเอง (จาก Excel)" : `ร่างกายใช้พลังงานประมาณ ${goals.tdee} kcal ต่อวัน`} ·{" "}
           <button className="link" onClick={openSetup}>{profile ? "แก้ข้อมูลส่วนตัว" : "กรอกข้อมูลส่วนตัว"}</button>
           {goals.custom && profile && (
             <>
@@ -1023,8 +1041,9 @@ export default function Home() {
         </datalist>
       </section>
 
-      <section className="card">
-        <h2>ข้อมูลของวัน · {dayLabel}</h2>
+      <details className="card more daycard" open={!!(dd.fastStart || dd.eatStart || dd.feeling || dd.weight || dd.note)}>
+        <summary>ข้อมูลเพิ่มเติมของ{dayLabel} (น้ำหนัก · IF · ความรู้สึก)</summary>
+        <p className="hint">ไม่ต้องกรอกก็ได้ ใช้เมื่ออยากติดตามน้ำหนัก ความรู้สึก หรือทำ IF (งดอาหารเป็นช่วงเวลา)</p>
         <div className="grid2">
           <label>
             <span>เริ่มงดอาหาร</span>
@@ -1066,7 +1085,7 @@ export default function Home() {
           onChange={(e) => setDay({ note: e.target.value || undefined })}
           placeholder="หมายเหตุของวัน"
         />
-      </section>
+      </details>
         </>
       )}
 

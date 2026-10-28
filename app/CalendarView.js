@@ -95,7 +95,7 @@ export default function CalendarView({ entries, days, goals, month, setMonth, to
           })}
         </div>
         <p className="hint">
-          สีของวันคือ % สำเร็จรวม (สูตรเดียวกับ Excel): เขียว ≥ 80% · เหลือง 60–79% · ชมพู ต่ำกว่า 60% ตัวเลขในช่องคือ kcal
+          แตะวันเพื่อดูหรือแก้ไข · ตัวเลขในช่องคือ kcal · เขียว = ใกล้เป้าหมายมาก · เหลือง = พอใช้ · ชมพู = ห่างเป้าหมาย
         </p>
         <div className="stats">
           <div className="stat"><span>วันที่บันทึก</span><b>{logged.length} วัน</b></div>
@@ -105,9 +105,9 @@ export default function CalendarView({ entries, days, goals, month, setMonth, to
       </section>
 
       <section className="card">
-        <h2>นำเข้าจาก Excel</h2>
+        <h2>นำเข้าข้อมูลจาก Excel</h2>
         <p className="hint">
-          เลือกไฟล์ .xlsx ที่มีชีต “บันทึกอาหาร” และ/หรือ “บันทึก IF &amp; ร่างกาย” ระบบอ่านไฟล์ในเครื่องของคุณ ไม่อัปโหลดไปที่ไหน และนำเข้าซ้ำได้โดยรายการที่ซ้ำจะถูกข้าม
+          เลือกไฟล์ Excel (.xlsx) ที่เคยจดไว้ แอปจะดึงอาหาร น้ำหนัก และบันทึก IF เข้ามาให้ ไม่ต้องกรอกใหม่ ข้อมูลไม่ออกจากเครื่องของคุณ นำเข้าซ้ำได้ รายการที่ซ้ำจะถูกข้ามให้
         </p>
         <input type="file" accept=".xlsx,.xls,.csv" onChange={choose} disabled={busy} aria-label="เลือกไฟล์ Excel" />
         {busy && <p className="hint">กำลังอ่านไฟล์…</p>}
