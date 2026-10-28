@@ -1,8 +1,19 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import Photo from "./Photo";
+import CalendarView from "./CalendarView";
+import { photoPut, photoDel, ifHours, uid, num1 } from "./lib";
 
 const KEY = "calorie-entries-v1";
 const PKEY = "calorie-profile-v1";
+const DKEY = "calorie-days-v1";
+const TKEY = "calorie-targets-v1";
+const FEELS = ["", "1 - แย่", "2 - ไม่ค่อยดี", "3 - ปานกลาง", "4 - ดี", "5 - ดีเยี่ยม"];
+const MEAL_LABELS = ["มื้อเปิดฟาสต์", "มื้อหลัก", "ของว่าง", "มื้อปิดฟาสต์"];
+const fmtDay = (k) => {
+  const [y, m, d] = k.split("-");
+  return `${+d}/${+m}/${y}`;
+};
 
 const ACTIVITY = [
   ["1.2", "แทบไม่ออกกำลังกาย"],
@@ -137,6 +148,17 @@ function Ingredients({ items, onGrams, defaultOpen = false }) {
   );
 }
 
+function groupsOf(list) {
+  const groups = [];
+  list.forEach((e) => {
+    const label = e.meal || MEALS[mealOf(e.ts)][0];
+    let g = groups.find((x) => x.label === label);
+    if (!g) groups.push((g = { label, items: [] }));
+    g.items.push(e);
+  });
+  return groups;
+}
+
 function mergeWeight(weights = [], day, kg) {
   return [...weights.filter((w) => w.day !== day), { day, kg }].sort((a, b) => (a.day < b.day ? -1 : 1));
 }
@@ -242,9 +264,14 @@ export default function Home() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ sex: "male", age: "", weight: "", height: "", activity: "1.375", goal: "lose" });
   const [newWeight, setNewWeight] = useState("");
-  const [view, setView] = useState(0); // 0 = วันนี้, -1 = เมื่อวาน
-  const [backMeal, setBackMeal] = useState(1);
+  const [pickDay, setPickDay] = useState(""); // "" = วันนี้
+  const [addTime, setAddTime] = useState("");
+  const [addMeal, setAddMeal] = useState("");
   const [edit, setEdit] = useState(null);
+  const [days, setDays] = useState({});
+  const [targets, setTargets] = useState(null);
+  const [month, setMonth] = useState("");
+  const photoRef = useRef(null);
   const [page, setPage] = useState("log");
   const [wDay, setWDay] = useState("");
   const [wKg, setWKg] = useState("");
@@ -254,7 +281,10 @@ export default function Home() {
       setEntries(JSON.parse(localStorage.getItem(KEY) || "[]"));
       const p = JSON.parse(localStorage.getItem(PKEY) || "null");
       if (p) setProfile(p);
+      setDays(JSON.parse(localStorage.getItem(DKEY) || "{}"));
+      setTargets(JSON.parse(localStorage.getItem(TKEY) || "null"));
     } catch {}
+    setMonth(dayKey().slice(0, 7));
     setWDay(dayKey());
     setReady(true);
   }, []);
@@ -263,19 +293,26 @@ export default function Home() {
     try {
       localStorage.setItem(KEY, JSON.stringify(entries));
       if (profile) localStorage.setItem(PKEY, JSON.stringify(profile));
+      localStorage.setItem(DKEY, JSON.stringify(days));
+      if (targets) localStorage.setItem(TKEY, JSON.stringify(targets));
+      else localStorage.removeItem(TKEY);
     } catch {}
-  }, [entries, profile, ready]);
+  }, [entries, profile, days, targets, ready]);
 
   const yesterdayShifted = () => new Date(Date.now() - 86400000 - CUTOFF * 3600000);
-  const viewDay = view === 0 ? dayKey() : keyOf(yesterdayShifted());
+  const viewDay = pickDay || dayKey();
   const dayEntries = entries.filter((e) => e.day === viewDay).sort((a, b) => a.ts - b.ts);
-  const sum = (k) => dayEntries.reduce((s, e) => s + e[k], 0);
+  const sum = (k) => Math.round(dayEntries.reduce((s, e) => s + e[k], 0) * 10) / 10;
 
-  const goals = profile ? calc(profile) : null;
+  const calcd = profile ? calc(profile) : null;
+  const goals = targets ? { ...(calcd || {}), ...targets, custom: true } : calcd;
+  const dd = days[viewDay] || {};
+  const setDay = (patch) => setDays((p) => ({ ...p, [viewDay]: { ...p[viewDay], ...patch } }));
+  const dayIF = ifHours(dd.fastStart, dd.eatStart);
   const lastW = profile?.weights?.[profile.weights.length - 1];
   const weightDue =
     profile && lastW && Math.floor((new Date(dayKey()) - new Date(lastW.day)) / 86400000) >= 7;
-  const showSetup = ready && (!profile || editing);
+  const showSetup = ready && ((!profile && !targets) || editing);
 
   function openSetup() {
     if (profile) {
@@ -297,7 +334,10 @@ export default function Home() {
   function saveProfile() {
     if (!formOk) return;
     const weight = Number(form.weight);
-    const prev = profile?.weights || [];
+    let prev = profile?.weights || [];
+    Object.entries(days).forEach(([d, v]) => {
+      if (v.weight && !prev.some((w) => w.day === d)) prev = mergeWeight(prev, d, v.weight);
+    });
     const weights =
       prev.length && prev[prev.length - 1].kg === weight ? prev : mergeWeight(prev, dayKey(), weight);
     setProfile({
@@ -317,6 +357,7 @@ export default function Home() {
     if (!profile || !day || day > dayKey() || !(kg >= 30 && kg <= 250)) return false;
     const weights = mergeWeight(profile.weights, day, kg);
     setProfile({ ...profile, weight: weights[weights.length - 1].kg, weights });
+    setDays((p) => ({ ...p, [day]: { ...p[day], weight: kg } }));
     return true;
   }
 
@@ -381,28 +422,36 @@ export default function Home() {
 
   function save(d) {
     let ts = Date.now();
-    if (view === -1) {
-      const y = yesterdayShifted();
-      ts = new Date(y.getFullYear(), y.getMonth(), y.getDate(), MEALS[backMeal][1], 0).getTime();
+    if (addTime || viewDay !== dayKey()) {
+      const [Y, M, D] = viewDay.split("-").map(Number);
+      const [hh, mm] = (addTime || "12:00").split(":").map(Number);
+      ts = new Date(Y, M - 1, D, hh, mm).getTime();
     }
     setEntries((p) => [
       ...p,
       {
-        id: Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+        id: uid(),
         ts,
         day: viewDay,
         name: d.name || "อาหาร",
+        meal: addMeal || undefined,
         calories: num(d.calories),
-        protein: num(d.protein),
-        carbs: num(d.carbs),
-        fat: num(d.fat),
+        protein: num1(d.protein),
+        carbs: num1(d.carbs),
+        fat: num1(d.fat),
         items: cleanItems(d.items),
+        photoId: d.photoId,
       },
     ]);
   }
 
   function confirmDraft() {
-    save(draft);
+    let photoId;
+    if (image) {
+      photoId = uid();
+      photoPut(photoId, image);
+    }
+    save({ ...draft, photoId });
     setDraft(null);
     setText("");
     setImage(null);
@@ -414,27 +463,123 @@ export default function Home() {
     setQuick("");
   }
 
+  function applyImport(p, useTargets) {
+    const have = new Set(entries.map((e) => [e.day, e.name, e.qty || "", e.calories].join("|")));
+    const seq = {};
+    const add = [];
+    let skipped = 0;
+    p.foods.forEach((f) => {
+      const k = [f.day, f.name, f.qty || "", f.calories].join("|");
+      if (have.has(k)) {
+        skipped++;
+        return;
+      }
+      have.add(k);
+      const [Y, M, D] = f.day.split("-").map(Number);
+      seq[f.day] = (seq[f.day] || 0) + 1;
+      add.push({
+        id: uid(),
+        ts: new Date(Y, M - 1, D, 12, 0, 0).getTime() + seq[f.day] * 1000,
+        day: f.day,
+        name: f.name,
+        meal: f.meal || undefined,
+        qty: f.qty || undefined,
+        calories: num(f.calories),
+        protein: num1(f.protein),
+        carbs: num1(f.carbs),
+        fat: num1(f.fat),
+        noTime: true,
+        src: "excel",
+      });
+    });
+    if (add.length) setEntries((x) => [...x, ...add]);
+    setDays((prev) => {
+      const n = { ...prev };
+      Object.entries(p.days).forEach(([d, v]) => {
+        n[d] = { ...v, ...(n[d] || {}) };
+      });
+      p.weights.forEach((w) => {
+        n[w.day] = { ...(n[w.day] || {}), weight: n[w.day]?.weight ?? w.kg };
+      });
+      return n;
+    });
+    if (profile && p.weights.length) {
+      let ws = profile.weights || [];
+      p.weights.forEach((w) => {
+        if (!ws.some((x) => x.day === w.day)) ws = mergeWeight(ws, w.day, w.kg);
+      });
+      if (ws.length) setProfile({ ...profile, weight: ws[ws.length - 1].kg, weights: ws });
+    }
+    if (useTargets && p.targets) setTargets(p.targets);
+    return { added: add.length, skipped };
+  }
+
+  async function pickEditPhoto(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !edit) return;
+    try {
+      const id = uid();
+      await photoPut(id, await resize(file, 900));
+      setEdit((cur) => (cur ? { ...cur, photoId: id } : cur));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function startEdit(e) {
+    setEdit({ ...e, time: e.noTime ? "" : timeOf(e.ts), meal: e.meal || "", qty: e.qty || "" });
+  }
+
+  function cancelEdit() {
+    const orig = entries.find((x) => x.id === edit?.id);
+    if (edit?.photoId && edit.photoId !== orig?.photoId) photoDel(edit.photoId);
+    setEdit(null);
+  }
+
   function saveEdit() {
+    const orig = entries.find((x) => x.id === edit.id);
+    if (orig?.photoId && orig.photoId !== edit.photoId) photoDel(orig.photoId);
     setEntries((p) =>
-      p.map((x) =>
-        x.id === edit.id
-          ? {
-              ...x,
-              name: edit.name || "อาหาร",
-              calories: num(edit.calories),
-              protein: num(edit.protein),
-              carbs: num(edit.carbs),
-              fat: num(edit.fat),
-              items: cleanItems(edit.items),
-            }
-          : x
-      )
+      p.map((x) => {
+        if (x.id !== edit.id) return x;
+        let { ts, noTime } = x;
+        if (edit.time) {
+          const [Y, M, D] = x.day.split("-").map(Number);
+          const [hh, mm] = edit.time.split(":").map(Number);
+          ts = new Date(Y, M - 1, D, hh, mm).getTime();
+          noTime = false;
+        }
+        return {
+          ...x,
+          ts,
+          noTime,
+          name: edit.name || "อาหาร",
+          meal: edit.meal.trim() || undefined,
+          qty: edit.qty.trim() || undefined,
+          calories: num(edit.calories),
+          protein: num1(edit.protein),
+          carbs: num1(edit.carbs),
+          fat: num1(edit.fat),
+          items: cleanItems(edit.items),
+          photoId: edit.photoId,
+        };
+      })
     );
     setEdit(null);
   }
 
   const remove = (id) => {
+    const ex = entries.find((x) => x.id === id);
+    if (ex?.photoId) photoDel(ex.photoId);
+    if (edit?.id === id && edit.photoId && edit.photoId !== ex?.photoId) photoDel(edit.photoId);
     setEntries((p) => p.filter((x) => x.id !== id));
+    setEdit(null);
+  };
+  const shiftDay = (n) => {
+    const [Y, M, D] = viewDay.split("-").map(Number);
+    const k = keyOf(new Date(Y, M - 1, D + n));
+    setPickDay(k === dayKey() ? "" : k);
     setEdit(null);
   };
   const editD = (k) => (e) => setDraft({ ...draft, [k]: e.target.value });
@@ -446,7 +591,7 @@ export default function Home() {
     ["carbs", "คาร์บ"],
     ["fat", "ไขมัน"],
   ];
-  const dayLabel = view === 0 ? "วันนี้" : "เมื่อวาน";
+  const dayLabel = viewDay === dayKey() ? "วันนี้" : viewDay === keyOf(yesterdayShifted()) ? "เมื่อวาน" : fmtDay(viewDay);
 
   const ws = profile?.weights || [];
   const first = ws[0];
@@ -462,11 +607,33 @@ export default function Home() {
     ? Math.round(loggedDays.reduce((s, d) => s + byDay[d], 0) / loggedDays.length)
     : 0;
 
+  const ifVals = Object.values(days).map((v) => ifHours(v.fastStart, v.eatStart)).filter((x) => x != null);
+  const avgIf = ifVals.length ? ifVals.reduce((a, b) => a + b, 0) / ifVals.length : null;
+  const feelVals = Object.values(days).map((v) => v.feeling).filter((x) => x >= 1 && x <= 5);
+  const avgFeel = feelVals.length ? feelVals.reduce((a, b) => a + b, 0) / feelVals.length : null;
+
+  const calendarView = (
+    <CalendarView
+      entries={entries}
+      days={days}
+      goals={goals}
+      month={month}
+      setMonth={setMonth}
+      today={dayKey()}
+      onPick={(d) => {
+        setPickDay(d === dayKey() ? "" : d);
+        setEdit(null);
+        go("log");
+      }}
+      onImport={applyImport}
+    />
+  );
+
   const progressView = !profile ? (
     <section className="card">
       <h2>ยังไม่มีข้อมูล</h2>
-      <p className="empty">ตั้งเป้าหมายแคลอรี่ในหน้าบันทึกก่อน แล้วค่อยกลับมาบันทึกน้ำหนักที่นี่</p>
-      <button className="primary" onClick={() => go("log")}>ไปหน้าบันทึก</button>
+      <p className="empty">กรอกข้อมูลส่วนตัว (เพศ อายุ น้ำหนัก ส่วนสูง) ก่อน แล้วค่อยดูความคืบหน้าที่นี่</p>
+      <button className="primary" onClick={() => { openSetup(); go("log"); }}>กรอกข้อมูลส่วนตัว</button>
     </section>
   ) : (
     <>
@@ -482,6 +649,8 @@ export default function Home() {
           <b>{avgKcal ? avgKcal : "-"}</b>
           {avgKcal > 0 && <small>เป้าหมาย {goals.kcal} · {loggedDays.length} วัน</small>}
         </div>
+        <div className="stat"><span>ชั่วโมง IF เฉลี่ย</span><b>{avgIf == null ? "-" : avgIf.toFixed(1) + " ชม."}</b></div>
+        <div className="stat"><span>ความรู้สึกเฉลี่ย</span><b>{avgFeel == null ? "-" : avgFeel.toFixed(1) + " / 5"}</b></div>
       </div>
 
       <section className="card">
@@ -542,6 +711,8 @@ export default function Home() {
     <main className="wrap">
       {page === "progress" ? (
         progressView
+      ) : page === "calendar" ? (
+        calendarView
       ) : (
         <>
       {showSetup && (
@@ -593,26 +764,47 @@ export default function Home() {
         </section>
       )}
 
-      <div className="tabs" role="tablist">
-        <button role="tab" aria-selected={view === -1} className={view === -1 ? "on" : ""} onClick={() => { setView(-1); setEdit(null); }}>
-          เมื่อวาน
-        </button>
-        <button role="tab" aria-selected={view === 0} className={view === 0 ? "on" : ""} onClick={() => { setView(0); setEdit(null); }}>
-          วันนี้
-        </button>
+      <div className="daynav">
+        <button className="ghost" aria-label="วันก่อนหน้า" onClick={() => shiftDay(-1)}>‹</button>
+        <div className="dayc">
+          <span>{dayLabel}</span>
+          <input
+            type="date"
+            value={viewDay}
+            aria-label="เลือกวันที่"
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v) {
+                setPickDay(v === dayKey() ? "" : v);
+                setEdit(null);
+              }
+            }}
+          />
+        </div>
+        <button className="ghost" aria-label="วันถัดไป" onClick={() => shiftDay(1)}>›</button>
       </div>
+      {viewDay !== dayKey() && (
+        <p className="meta">
+          <button className="link" onClick={() => { setPickDay(""); setEdit(null); }}>กลับมาวันนี้</button>
+        </p>
+      )}
 
       <section className="box">
-        {view === -1 && (
-          <label className="field inline">
-            <span>บันทึกย้อนหลังเป็นมื้อ</span>
-            <select value={backMeal} onChange={(e) => setBackMeal(Number(e.target.value))}>
-              {MEALS.map(([l], i) => (
-                <option key={l} value={i}>{l}</option>
+        <div className="when">
+          <label>
+            <span>เวลา (เว้นว่าง = {viewDay === dayKey() ? "ตอนนี้" : "12:00"})</span>
+            <input type="time" value={addTime} onChange={(e) => setAddTime(e.target.value)} />
+          </label>
+          <label>
+            <span>มื้อ</span>
+            <select value={addMeal} onChange={(e) => setAddMeal(e.target.value)}>
+              <option value="">อัตโนมัติตามเวลา</option>
+              {MEAL_LABELS.map((l) => (
+                <option key={l} value={l}>{l}</option>
               ))}
             </select>
           </label>
-        )}
+        </div>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -726,8 +918,13 @@ export default function Home() {
 
       {goals && !editing && (
         <p className="meta">
-          BMR {goals.bmr} · TDEE {goals.tdee} kcal ·{" "}
-          <button className="link" onClick={openSetup}>แก้ข้อมูลส่วนตัว</button>
+          {goals.custom ? "เป้าหมายตั้งเอง (จาก Excel)" : `BMR ${goals.bmr} · TDEE ${goals.tdee} kcal`} ·{" "}
+          <button className="link" onClick={openSetup}>{profile ? "แก้ข้อมูลส่วนตัว" : "กรอกข้อมูลส่วนตัว"}</button>
+          {goals.custom && profile && (
+            <>
+              {" "}· <button className="link" onClick={() => setTargets(null)}>ใช้ค่าที่คำนวณจากโปรไฟล์</button>
+            </>
+          )}
         </p>
       )}
 
@@ -736,9 +933,7 @@ export default function Home() {
         {dayEntries.length === 0 ? (
           <p className="empty">🍙 ยังไม่มีรายการ พิมพ์อาหารด้านบนได้เลย</p>
         ) : (
-          MEALS.map(([label], mi) => {
-            const items = dayEntries.filter((e) => mealOf(e.ts) === mi);
-            if (!items.length) return null;
+          groupsOf(dayEntries).map(({ label, items }) => {
             return (
               <div key={label}>
                 <h3 className="meal">
@@ -750,6 +945,20 @@ export default function Home() {
                     edit?.id === e.id ? (
                       <li key={e.id} className="editli">
                         <input className="title" value={edit.name} onChange={editE("name")} aria-label="ชื่ออาหาร" />
+                        <div className="when">
+                          <label>
+                            <span>เวลา</span>
+                            <input type="time" value={edit.time} onChange={editE("time")} />
+                          </label>
+                          <label>
+                            <span>มื้อ</span>
+                            <input list="meal-labels" value={edit.meal} onChange={editE("meal")} placeholder="อัตโนมัติ" />
+                          </label>
+                        </div>
+                        <label className="field">
+                          <span>ปริมาณ / หมายเหตุ</span>
+                          <input value={edit.qty} onChange={editE("qty")} />
+                        </label>
                         {edit.items?.length ? (
                           <>
                             <div className="grid">
@@ -772,18 +981,30 @@ export default function Home() {
                             ))}
                           </div>
                         )}
+                        <div className="photobox">
+                          <Photo id={edit.photoId} className="big" />
+                          <input ref={photoRef} type="file" accept="image/*" hidden onChange={pickEditPhoto} />
+                          <button className="ghost" onClick={() => photoRef.current?.click()}>
+                            {edit.photoId ? "เปลี่ยนรูป" : "เพิ่มรูป"}
+                          </button>
+                          {edit.photoId && (
+                            <button className="ghost" onClick={() => setEdit({ ...edit, photoId: undefined })}>เอารูปออก</button>
+                          )}
+                        </div>
                         <div className="row3">
                           <button className="ghost" onClick={() => remove(e.id)}>ลบ</button>
-                          <button className="ghost" onClick={() => setEdit(null)}>ยกเลิก</button>
+                          <button className="ghost" onClick={cancelEdit}>ยกเลิก</button>
                           <button className="primary" onClick={saveEdit}>บันทึก</button>
                         </div>
                       </li>
                     ) : (
-                      <SwipeRow key={e.id} onDelete={() => remove(e.id)} onTap={() => setEdit({ ...e })}>
-                        <span className="time">{timeOf(e.ts)}</span>
+                      <SwipeRow key={e.id} onDelete={() => remove(e.id)} onTap={() => startEdit(e)}>
+                        <span className="time">{e.noTime ? "—" : timeOf(e.ts)}</span>
                         <span className="name">
                           {e.name}
                           {e.items?.length ? <span className="chev"> ▾</span> : null}
+                          {e.qty ? <small className="qty">{e.qty}</small> : null}
+                          <Photo id={e.photoId} className="mini" />
                         </span>
                         <span className="cal">{e.calories}</span>
                       </SwipeRow>
@@ -794,7 +1015,57 @@ export default function Home() {
             );
           })
         )}
-        {dayEntries.length > 0 && <p className="hint">แตะรายการเพื่อแก้ไข ปัดซ้ายเพื่อลบ</p>}
+        {dayEntries.length > 0 && <p className="hint">แตะรายการเพื่อแก้ไข (เพิ่มเวลา เพิ่มรูป) ปัดซ้ายเพื่อลบ</p>}
+        <datalist id="meal-labels">
+          {MEAL_LABELS.map((l) => (
+            <option key={l} value={l} />
+          ))}
+        </datalist>
+      </section>
+
+      <section className="card">
+        <h2>ข้อมูลของวัน · {dayLabel}</h2>
+        <div className="grid2">
+          <label>
+            <span>เริ่มงดอาหาร</span>
+            <input type="time" value={dd.fastStart || ""} onChange={(e) => setDay({ fastStart: e.target.value })} />
+          </label>
+          <label>
+            <span>เริ่มกินอาหาร</span>
+            <input type="time" value={dd.eatStart || ""} onChange={(e) => setDay({ eatStart: e.target.value })} />
+          </label>
+          <label>
+            <span>ความรู้สึก</span>
+            <select value={dd.feeling || 0} onChange={(e) => setDay({ feeling: Number(e.target.value) || undefined })}>
+              {FEELS.map((l, i) => (
+                <option key={i} value={i}>{l || "—"}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>น้ำหนัก (กก.)</span>
+            <input
+              key={viewDay + "-" + (dd.weight ?? "")}
+              type="number"
+              inputMode="decimal"
+              defaultValue={dd.weight ?? ""}
+              onBlur={(e) => {
+                const v = Math.round(parseFloat(e.target.value) * 10) / 10;
+                if (!(v >= 30 && v <= 250)) return;
+                if (profile) logWeight(viewDay, v);
+                else setDay({ weight: v });
+              }}
+            />
+          </label>
+        </div>
+        <p className="hint">{dayIF == null ? "ใส่เวลาเริ่มงดและเริ่มกิน เพื่อคำนวณชั่วโมง IF อัตโนมัติ" : `งดอาหารนาน ${dayIF.toFixed(1)} ชั่วโมง`}</p>
+        <textarea
+          className="note"
+          rows={2}
+          value={dd.note || ""}
+          onChange={(e) => setDay({ note: e.target.value || undefined })}
+          placeholder="หมายเหตุของวัน"
+        />
       </section>
         </>
       )}
@@ -802,6 +1073,9 @@ export default function Home() {
       <nav className="nav" aria-label="เมนูหลัก">
         <button className={page === "log" ? "on" : ""} aria-current={page === "log"} onClick={() => go("log")}>
           บันทึก
+        </button>
+        <button className={page === "calendar" ? "on" : ""} aria-current={page === "calendar"} onClick={() => go("calendar")}>
+          ปฏิทิน
         </button>
         <button className={page === "progress" ? "on" : ""} aria-current={page === "progress"} onClick={() => go("progress")}>
           ความคืบหน้า
