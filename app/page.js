@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import Photo from "./Photo";
 import CalendarView from "./CalendarView";
-import { photoPut, photoDel, ifHours, uid, num1 } from "./lib";
+import { photoPut, photoDel, ifHours, uid, num1, dayScore } from "./lib";
+import { WeightLine, CalBars, MacroDonut, IfFeel, ScoreLine } from "./Charts";
 
 const KEY = "calorie-entries-v1";
 const PKEY = "calorie-profile-v1";
@@ -272,6 +273,7 @@ export default function Home() {
   const [targets, setTargets] = useState(null);
   const [month, setMonth] = useState("");
   const photoRef = useRef(null);
+  const [range, setRange] = useState(30);
   const [page, setPage] = useState("log");
   const [wDay, setWDay] = useState("");
   const [wKg, setWKg] = useState("");
@@ -354,17 +356,25 @@ export default function Home() {
 
   function logWeight(day, value) {
     const kg = Math.round(Number(value) * 10) / 10;
-    if (!profile || !day || day > dayKey() || !(kg >= 30 && kg <= 250)) return false;
-    const weights = mergeWeight(profile.weights, day, kg);
-    setProfile({ ...profile, weight: weights[weights.length - 1].kg, weights });
+    if (!day || day > dayKey() || !(kg >= 30 && kg <= 250)) return false;
+    if (profile) {
+      const weights = mergeWeight(profile.weights, day, kg);
+      setProfile({ ...profile, weight: weights[weights.length - 1].kg, weights });
+    }
     setDays((p) => ({ ...p, [day]: { ...p[day], weight: kg } }));
     return true;
   }
 
   function removeWeight(day) {
-    const weights = profile.weights.filter((w) => w.day !== day);
-    if (!weights.length) return;
-    setProfile({ ...profile, weight: weights[weights.length - 1].kg, weights });
+    setDays((p) => {
+      if (!p[day]) return p;
+      const { weight, ...rest } = p[day];
+      return { ...p, [day]: rest };
+    });
+    if (profile) {
+      const weights = profile.weights.filter((w) => w.day !== day);
+      setProfile({ ...profile, weight: weights.length ? weights[weights.length - 1].kg : profile.weight, weights });
+    }
   }
 
   function updateWeight() {
@@ -593,24 +603,48 @@ export default function Home() {
   ];
   const dayLabel = viewDay === dayKey() ? "วันนี้" : viewDay === keyOf(yesterdayShifted()) ? "เมื่อวาน" : fmtDay(viewDay);
 
-  const ws = profile?.weights || [];
-  const first = ws[0];
-  const last = ws[ws.length - 1];
-  const change = first && last ? Math.round((last.kg - first.kg) * 10) / 10 : 0;
-  const byDay = {};
-  entries.forEach((e) => {
-    byDay[e.day] = (byDay[e.day] || 0) + e.calories;
+  const wmap = {};
+  (profile?.weights || []).forEach((w) => {
+    wmap[w.day] = w.kg;
   });
-  let loggedDays = Object.keys(byDay).filter((d) => d !== dayKey());
-  if (!loggedDays.length) loggedDays = Object.keys(byDay);
-  const avgKcal = loggedDays.length
-    ? Math.round(loggedDays.reduce((s, d) => s + byDay[d], 0) / loggedDays.length)
-    : 0;
+  Object.entries(days).forEach(([d, v]) => {
+    if (v.weight) wmap[d] = v.weight;
+  });
+  const allW = Object.keys(wmap).sort().map((d) => ({ day: d, kg: wmap[d] }));
+  const first = allW[0];
+  const last = allW[allW.length - 1];
+  const change = first && last ? Math.round((last.kg - first.kg) * 10) / 10 : 0;
 
-  const ifVals = Object.values(days).map((v) => ifHours(v.fastStart, v.eatStart)).filter((x) => x != null);
-  const avgIf = ifVals.length ? ifVals.reduce((a, b) => a + b, 0) / ifVals.length : null;
-  const feelVals = Object.values(days).map((v) => v.feeling).filter((x) => x >= 1 && x <= 5);
-  const avgFeel = feelVals.length ? feelVals.reduce((a, b) => a + b, 0) / feelVals.length : null;
+  const tot = {};
+  entries.forEach((e) => {
+    const x = tot[e.day] || (tot[e.day] = { calories: 0, protein: 0, carbs: 0, fat: 0 });
+    x.calories += e.calories;
+    x.protein += e.protein;
+    x.carbs += e.carbs;
+    x.fat += e.fat;
+  });
+  const dayKeys = Array.from(new Set([...Object.keys(tot), ...Object.keys(days), ...Object.keys(wmap)])).sort();
+  const rowsAll = dayKeys.map((d) => ({
+    day: d,
+    kcal: tot[d]?.calories ?? null,
+    protein: tot[d]?.protein ?? 0,
+    carbs: tot[d]?.carbs ?? 0,
+    fat: tot[d]?.fat ?? 0,
+    ifh: ifHours(days[d]?.fastStart, days[d]?.eatStart),
+    feel: days[d]?.feeling ?? null,
+    weight: wmap[d] ?? null,
+    score: dayScore(tot[d], goals),
+  }));
+  const rows = range ? rowsAll.slice(-range) : rowsAll;
+  const avgOf = (k) => {
+    const a = rows.map((r) => r[k]).filter((v) => v != null);
+    return a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  };
+  const avgKcal = avgOf("kcal");
+  const avgIf = avgOf("ifh");
+  const avgFeel = avgOf("feel");
+  const avgScore = avgOf("score");
+  const macroG = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
 
   const calendarView = (
     <CalendarView
@@ -629,81 +663,104 @@ export default function Home() {
     />
   );
 
-  const progressView = !profile ? (
+  const progressView = !rowsAll.length ? (
     <section className="card">
       <h2>ยังไม่มีข้อมูล</h2>
-      <p className="empty">กรอกข้อมูลส่วนตัว (เพศ อายุ น้ำหนัก ส่วนสูง) ก่อน แล้วค่อยดูความคืบหน้าที่นี่</p>
-      <button className="primary" onClick={() => { openSetup(); go("log"); }}>กรอกข้อมูลส่วนตัว</button>
+      <p className="empty">บันทึกอาหารสักมื้อ หรือนำเข้าข้อมูลจาก Excel แล้วกราฟและสถิติจะขึ้นที่นี่</p>
+      <div className="row">
+        <button className="ghost" onClick={() => go("log")}>ไปหน้าบันทึก</button>
+        <button className="primary" onClick={() => go("calendar")}>นำเข้าจาก Excel</button>
+      </div>
     </section>
   ) : (
     <>
+      <div className="tabs three" role="tablist">
+        {[[14, "14 วัน"], [30, "30 วัน"], [0, "ทั้งหมด"]].map(([v, l]) => (
+          <button key={v} role="tab" aria-selected={range === v} className={range === v ? "on" : ""} onClick={() => setRange(v)}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <p className="meta">สรุปจาก {rows.length} วันล่าสุดที่มีข้อมูล</p>
+
       <div className="stats">
-        <div className="stat"><span>น้ำหนักปัจจุบัน</span><b>{last.kg} กก.</b></div>
-        <div className="stat"><span>น้ำหนักเริ่มต้น</span><b>{first.kg} กก.</b></div>
         <div className="stat">
-          <span>เปลี่ยนไป</span>
-          <b>{change > 0 ? "+" : ""}{change} กก.</b>
+          <span>น้ำหนักปัจจุบัน</span>
+          <b>{last ? last.kg + " กก." : "-"}</b>
+          {first && last && allW.length > 1 && <small>เริ่มต้น {first.kg} · เปลี่ยน {change > 0 ? "+" : ""}{change} กก.</small>}
         </div>
         <div className="stat">
           <span>แคลอรี่เฉลี่ย/วัน</span>
-          <b>{avgKcal ? avgKcal : "-"}</b>
-          {avgKcal > 0 && <small>เป้าหมาย {goals.kcal} · {loggedDays.length} วัน</small>}
+          <b>{avgKcal == null ? "-" : Math.round(avgKcal)}</b>
+          {goals && <small>เป้าหมาย {goals.kcal}</small>}
         </div>
+        <div className="stat"><span>% สำเร็จเฉลี่ย</span><b>{avgScore == null ? "-" : Math.round(avgScore * 100) + "%"}</b></div>
         <div className="stat"><span>ชั่วโมง IF เฉลี่ย</span><b>{avgIf == null ? "-" : avgIf.toFixed(1) + " ชม."}</b></div>
         <div className="stat"><span>ความรู้สึกเฉลี่ย</span><b>{avgFeel == null ? "-" : avgFeel.toFixed(1) + " / 5"}</b></div>
       </div>
+
+      <section className="card"><h2>แนวโน้มน้ำหนัก</h2><WeightLine rows={rows} /></section>
+      <section className="card">
+        <h2>แคลอรี่ที่กินจริง เทียบเป้าหมายรายวัน</h2>
+        <CalBars rows={rows} target={goals?.kcal} />
+        <p className="hint">แท่ง = กินจริง · เส้นประ = เป้าหมาย · แท่งสีชมพู = เกินเป้าหมาย</p>
+      </section>
+      <section className="card">
+        <h2>สัดส่วนสารอาหารหลัก</h2>
+        <MacroDonut
+          parts={[
+            { name: "โปรตีน", g: macroG("protein"), color: "#6fb3f2" },
+            { name: "คาร์โบไฮเดรต", g: macroG("carbs"), color: "#f6cf6a" },
+            { name: "ไขมัน", g: macroG("fat"), color: "#f29bb0" },
+          ]}
+        />
+      </section>
+      <section className="card">
+        <h2>ชั่วโมง IF กับระดับความรู้สึก</h2>
+        <IfFeel rows={rows} />
+        <p className="hint">แท่ง = ชั่วโมง IF (แกนซ้าย) · เส้นชมพู = ความรู้สึก 1–5 (แกนขวา)</p>
+      </section>
+      <section className="card">
+        <h2>% ความสำเร็จรายวัน</h2>
+        <ScoreLine rows={rows} />
+        <p className="hint">เส้นประ = เป้าหมาย 100% (คิดจากแคลอรี่ โปรตีน คาร์บ ไขมัน เทียบเป้าหมาย)</p>
+      </section>
 
       <section className="card">
         <h2>บันทึกน้ำหนัก</h2>
         <div className="wform">
           <input type="date" value={wDay} max={dayKey()} onChange={(e) => setWDay(e.target.value)} aria-label="วันที่" />
-          <input
-            type="number"
-            inputMode="decimal"
-            value={wKg}
-            onChange={(e) => setWKg(e.target.value)}
-            placeholder="กก."
-            aria-label="น้ำหนัก (กก.)"
-          />
+          <input type="number" inputMode="decimal" value={wKg} onChange={(e) => setWKg(e.target.value)} placeholder="กก." aria-label="น้ำหนัก (กก.)" />
         </div>
-        <button
-          className="primary"
-          disabled={!wKg}
-          onClick={() => {
-            if (logWeight(wDay, wKg)) setWKg("");
-          }}
-        >
+        <button className="primary" disabled={!wKg} onClick={() => { if (logWeight(wDay, wKg)) setWKg(""); }}>
           บันทึกน้ำหนัก
         </button>
         <p className="hint">เลือกวันที่เดิมแล้วบันทึกซ้ำ จะเป็นการแก้ค่าของวันนั้น</p>
       </section>
 
-      <section className="card">
-        <h2>กราฟน้ำหนัก</h2>
-        <WeightChart weights={ws} />
-      </section>
-
-      <section>
-        <h2>ประวัติน้ำหนัก</h2>
-        <ul className="wlist">
-          {[...ws].reverse().map((w, i, arr) => {
-            const prev = arr[i + 1];
-            const d = prev ? Math.round((w.kg - prev.kg) * 10) / 10 : null;
-            return (
-              <li key={w.day}>
-                <span className="time">{md(w.day)}</span>
-                <span className="name">{w.kg} กก.</span>
-                <span className="diff">{d === null ? "" : d > 0 ? `+${d}` : d}</span>
-                {ws.length > 1 ? (
-                  <button className="del" aria-label={`ลบน้ำหนักวันที่ ${md(w.day)}`} onClick={() => removeWeight(w.day)}>ลบ</button>
-                ) : (
-                  <span />
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+      {allW.length > 0 && (
+        <section>
+          <h2>ประวัติน้ำหนัก</h2>
+          <ul className="wlist">
+            {[...allW].reverse().map((w, i, arr) => {
+              const prev = arr[i + 1];
+              const d = prev ? Math.round((w.kg - prev.kg) * 10) / 10 : null;
+              return (
+                <li key={w.day}>
+                  <span className="time">{+w.day.slice(8)}/{+w.day.slice(5, 7)}</span>
+                  <span className="name">{w.kg} กก.</span>
+                  <span className="diff">{d === null ? "" : d > 0 ? `+${d}` : d}</span>
+                  {allW.length > 1 ? (
+                    <button className="del" aria-label={`ลบน้ำหนักวันที่ ${w.day}`} onClick={() => removeWeight(w.day)}>ลบ</button>
+                  ) : (
+                    <span />
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
     </>
   );
 

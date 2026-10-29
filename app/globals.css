@@ -192,3 +192,16 @@ input, select, textarea { min-width: 0; }
 .daycard > summary { font-size: 15px; color: var(--ink); font-weight: 500; }
 .daycard[open] { display: grid; gap: 10px; }
 .steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+
+.tabs.three { grid-template-columns: repeat(3, 1fr); }
+.c-bar { fill: var(--accent); }
+.c-bar.over { fill: var(--err); }
+.c-target { stroke: var(--err); stroke-width: 1.6; stroke-dasharray: 5 4; fill: none; }
+.c-line2 { fill: none; stroke: #f29bb0; stroke-width: 2.5; stroke-linejoin: round; }
+.c-dot2 { fill: var(--panel); stroke: #f29bb0; stroke-width: 2; }
+.donut { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.donut svg { width: 120px; height: 120px; flex: none; }
+.legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; min-width: 0; }
+.legend li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.legend i { width: 12px; height: 12px; border-radius: 4px; flex: none; }
+.legend b { font-weight: 500; color: var(--muted); font-size: 13px; }
