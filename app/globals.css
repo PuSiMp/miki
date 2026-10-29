@@ -205,3 +205,9 @@ input, select, textarea { min-width: 0; }
 .legend li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .legend i { width: 12px; height: 12px; border-radius: 4px; flex: none; }
 .legend b { font-weight: 500; color: var(--muted); font-size: 13px; }
+
+.chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chips button { flex: none; padding: 8px 14px; background: var(--panel); color: var(--muted); border: 1px solid var(--line); scroll-snap-align: start; }
+.chips button.on { background: var(--accent); color: var(--accent-ink); font-weight: 700; border-color: transparent; }
+.chartarea { display: grid; gap: 16px; min-width: 0; }

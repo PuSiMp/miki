@@ -60,7 +60,7 @@ export default function CalendarView({ entries, days, goals, month, setMonth, to
 
   function apply() {
     const r = onImport(parsed, useTargets);
-    setMsg(`นำเข้าแล้ว: เพิ่มอาหาร ${r.added} รายการ (ข้ามที่ซ้ำ ${r.skipped})`);
+    setMsg(`นำเข้าแล้ว: อาหารใหม่ ${r.added} รายการ (ซ้ำ ${r.skipped}) · น้ำหนัก ${r.weights} วัน · IF/ความรู้สึก ${r.daysInfo} วัน`);
     if (parsed.latest) setMonth(parsed.latest.slice(0, 7));
     setParsed(null);
   }

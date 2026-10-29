@@ -7,6 +7,13 @@ import { WeightLine, CalBars, MacroDonut, IfFeel, ScoreLine } from "./Charts";
 
 const KEY = "calorie-entries-v1";
 const PKEY = "calorie-profile-v1";
+const CHARTS = [
+  ["weight", "น้ำหนัก"],
+  ["kcal", "แคลอรี่"],
+  ["macro", "สารอาหาร"],
+  ["if", "IF · ความรู้สึก"],
+  ["score", "% สำเร็จ"],
+];
 const DKEY = "calorie-days-v1";
 const TKEY = "calorie-targets-v1";
 const FEELS = ["", "1 - แย่", "2 - ไม่ค่อยดี", "3 - ปานกลาง", "4 - ดี", "5 - ดีเยี่ยม"];
@@ -274,6 +281,8 @@ export default function Home() {
   const [month, setMonth] = useState("");
   const photoRef = useRef(null);
   const [range, setRange] = useState(30);
+  const [chart, setChart] = useState("weight");
+  const swipeX = useRef(0);
   const [page, setPage] = useState("log");
   const [wDay, setWDay] = useState("");
   const [wKg, setWKg] = useState("");
@@ -509,19 +518,19 @@ export default function Home() {
         n[d] = { ...v, ...(n[d] || {}) };
       });
       p.weights.forEach((w) => {
-        n[w.day] = { ...(n[w.day] || {}), weight: n[w.day]?.weight ?? w.kg };
+        n[w.day] = { ...(n[w.day] || {}), weight: w.kg };
       });
       return n;
     });
     if (profile && p.weights.length) {
       let ws = profile.weights || [];
       p.weights.forEach((w) => {
-        if (!ws.some((x) => x.day === w.day)) ws = mergeWeight(ws, w.day, w.kg);
+        ws = mergeWeight(ws, w.day, w.kg);
       });
       if (ws.length) setProfile({ ...profile, weight: ws[ws.length - 1].kg, weights: ws });
     }
     if (useTargets && p.targets) setTargets(p.targets);
-    return { added: add.length, skipped };
+    return { added: add.length, skipped, weights: p.weights.length, daysInfo: Object.keys(p.days).length };
   }
 
   async function pickEditPhoto(e) {
@@ -699,68 +708,102 @@ export default function Home() {
         <div className="stat"><span>ความรู้สึกเฉลี่ย</span><b>{avgFeel == null ? "-" : avgFeel.toFixed(1) + " / 5"}</b></div>
       </div>
 
-      <section className="card"><h2>แนวโน้มน้ำหนัก</h2><WeightLine rows={rows} /></section>
-      <section className="card">
-        <h2>แคลอรี่ที่กินจริง เทียบเป้าหมายรายวัน</h2>
-        <CalBars rows={rows} target={goals?.kcal} />
-        <p className="hint">แท่ง = กินจริง · เส้นประ = เป้าหมาย · แท่งสีชมพู = เกินเป้าหมาย</p>
-      </section>
-      <section className="card">
-        <h2>สัดส่วนสารอาหารหลัก</h2>
-        <MacroDonut
-          parts={[
-            { name: "โปรตีน", g: macroG("protein"), color: "#6fb3f2" },
-            { name: "คาร์โบไฮเดรต", g: macroG("carbs"), color: "#f6cf6a" },
-            { name: "ไขมัน", g: macroG("fat"), color: "#f29bb0" },
-          ]}
-        />
-      </section>
-      <section className="card">
-        <h2>ชั่วโมง IF กับระดับความรู้สึก</h2>
-        <IfFeel rows={rows} />
-        <p className="hint">แท่ง = ชั่วโมง IF (แกนซ้าย) · เส้นชมพู = ความรู้สึก 1–5 (แกนขวา)</p>
-      </section>
-      <section className="card">
-        <h2>% ความสำเร็จรายวัน</h2>
-        <ScoreLine rows={rows} />
-        <p className="hint">เส้นประ = เป้าหมาย 100% (คิดจากแคลอรี่ โปรตีน คาร์บ ไขมัน เทียบเป้าหมาย)</p>
-      </section>
+      <div className="chips" role="tablist" aria-label="เลือกกราฟ">
+        {CHARTS.map(([k, l]) => (
+          <button key={k} role="tab" aria-selected={chart === k} className={chart === k ? "on" : ""} onClick={() => setChart(k)}>
+            {l}
+          </button>
+        ))}
+      </div>
 
-      <section className="card">
-        <h2>บันทึกน้ำหนัก</h2>
-        <div className="wform">
-          <input type="date" value={wDay} max={dayKey()} onChange={(e) => setWDay(e.target.value)} aria-label="วันที่" />
-          <input type="number" inputMode="decimal" value={wKg} onChange={(e) => setWKg(e.target.value)} placeholder="กก." aria-label="น้ำหนัก (กก.)" />
-        </div>
-        <button className="primary" disabled={!wKg} onClick={() => { if (logWeight(wDay, wKg)) setWKg(""); }}>
-          บันทึกน้ำหนัก
-        </button>
-        <p className="hint">เลือกวันที่เดิมแล้วบันทึกซ้ำ จะเป็นการแก้ค่าของวันนั้น</p>
-      </section>
-
-      {allW.length > 0 && (
-        <section>
-          <h2>ประวัติน้ำหนัก</h2>
-          <ul className="wlist">
-            {[...allW].reverse().map((w, i, arr) => {
-              const prev = arr[i + 1];
-              const d = prev ? Math.round((w.kg - prev.kg) * 10) / 10 : null;
-              return (
-                <li key={w.day}>
-                  <span className="time">{+w.day.slice(8)}/{+w.day.slice(5, 7)}</span>
-                  <span className="name">{w.kg} กก.</span>
-                  <span className="diff">{d === null ? "" : d > 0 ? `+${d}` : d}</span>
-                  {allW.length > 1 ? (
-                    <button className="del" aria-label={`ลบน้ำหนักวันที่ ${w.day}`} onClick={() => removeWeight(w.day)}>ลบ</button>
-                  ) : (
-                    <span />
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
+      <div
+        className="chartarea"
+        onTouchStart={(e) => {
+          swipeX.current = e.touches[0].clientX;
+        }}
+        onTouchEnd={(e) => {
+          const dx = e.changedTouches[0].clientX - swipeX.current;
+          if (Math.abs(dx) < 70) return;
+          const n = CHARTS.findIndex(([k]) => k === chart) + (dx < 0 ? 1 : -1);
+          if (n >= 0 && n < CHARTS.length) setChart(CHARTS[n][0]);
+        }}
+      >
+        {chart === "weight" && (
+          <>
+            <section className="card">
+              <h2>แนวโน้มน้ำหนัก</h2>
+              <WeightLine rows={rows} />
+            </section>
+            <section className="card">
+              <h2>บันทึกน้ำหนัก</h2>
+              <div className="wform">
+                <input type="date" value={wDay} max={dayKey()} onChange={(e) => setWDay(e.target.value)} aria-label="วันที่" />
+                <input type="number" inputMode="decimal" value={wKg} onChange={(e) => setWKg(e.target.value)} placeholder="กก." aria-label="น้ำหนัก (กก.)" />
+              </div>
+              <button className="primary" disabled={!wKg} onClick={() => { if (logWeight(wDay, wKg)) setWKg(""); }}>
+                บันทึกน้ำหนัก
+              </button>
+              <p className="hint">เลือกวันที่เดิมแล้วบันทึกซ้ำ จะเป็นการแก้ค่าของวันนั้น</p>
+            </section>
+            {allW.length > 0 && (
+              <section>
+                <h2>ประวัติน้ำหนัก</h2>
+                <ul className="wlist">
+                  {[...allW].reverse().map((w, i, arr) => {
+                    const prev = arr[i + 1];
+                    const d = prev ? Math.round((w.kg - prev.kg) * 10) / 10 : null;
+                    return (
+                      <li key={w.day}>
+                        <span className="time">{+w.day.slice(8)}/{+w.day.slice(5, 7)}</span>
+                        <span className="name">{w.kg} กก.</span>
+                        <span className="diff">{d === null ? "" : d > 0 ? `+${d}` : d}</span>
+                        {allW.length > 1 ? (
+                          <button className="del" aria-label={`ลบน้ำหนักวันที่ ${w.day}`} onClick={() => removeWeight(w.day)}>ลบ</button>
+                        ) : (
+                          <span />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
+          </>
+        )}
+        {chart === "kcal" && (
+          <section className="card">
+            <h2>แคลอรี่ที่กินจริง เทียบเป้าหมายรายวัน</h2>
+            <CalBars rows={rows} target={goals?.kcal} />
+            <p className="hint">แท่ง = กินจริง · เส้นประ = เป้าหมาย · แท่งสีชมพู = เกินเป้าหมาย</p>
+          </section>
+        )}
+        {chart === "macro" && (
+          <section className="card">
+            <h2>สัดส่วนสารอาหารหลัก</h2>
+            <MacroDonut
+              parts={[
+                { name: "โปรตีน", g: macroG("protein"), color: "#6fb3f2" },
+                { name: "คาร์โบไฮเดรต", g: macroG("carbs"), color: "#f6cf6a" },
+                { name: "ไขมัน", g: macroG("fat"), color: "#f29bb0" },
+              ]}
+            />
+          </section>
+        )}
+        {chart === "if" && (
+          <section className="card">
+            <h2>ชั่วโมง IF กับระดับความรู้สึก</h2>
+            <IfFeel rows={rows} />
+            <p className="hint">แท่ง = ชั่วโมง IF (แกนซ้าย) · เส้นชมพู = ความรู้สึก 1–5 (แกนขวา)</p>
+          </section>
+        )}
+        {chart === "score" && (
+          <section className="card">
+            <h2>% ความสำเร็จรายวัน</h2>
+            <ScoreLine rows={rows} />
+            <p className="hint">เส้นประ = เป้าหมาย 100% (คิดจากแคลอรี่ โปรตีน คาร์บ ไขมัน เทียบเป้าหมาย)</p>
+          </section>
+        )}
+      </div>
     </>
   );
 
