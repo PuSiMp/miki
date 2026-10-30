@@ -211,3 +211,10 @@ input, select, textarea { min-width: 0; }
 .chips button { flex: none; padding: 8px 14px; background: var(--panel); color: var(--muted); border: 1px solid var(--line); scroll-snap-align: start; }
 .chips button.on { background: var(--accent); color: var(--accent-ink); font-weight: 700; border-color: transparent; }
 .chartarea { display: grid; gap: 16px; min-width: 0; }
+
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.wform3 { grid-template-columns: 1.3fr 1fr 1fr; }
+.rate { margin: 0; font-size: 18px; }
+.rate b { color: var(--link); }
+.meta.warn { color: var(--ink); background: #fff3c9; border-radius: 12px; padding: 8px 12px; }
+@media (prefers-color-scheme: dark) { .meta.warn { background: #3b3416; } }

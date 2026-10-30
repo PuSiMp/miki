@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import Photo from "./Photo";
 import CalendarView from "./CalendarView";
 import { photoPut, photoDel, ifHours, uid, num1, dayScore } from "./lib";
-import { WeightLine, CalBars, MacroDonut, IfFeel, ScoreLine } from "./Charts";
+import { WeightLine, BodyComp, CalBars, MacroDonut, IfFeel, ScoreLine } from "./Charts";
 
 const KEY = "calorie-entries-v1";
 const PKEY = "calorie-profile-v1";
 const CHARTS = [
   ["weight", "น้ำหนัก"],
+  ["body", "องค์ประกอบร่างกาย"],
   ["kcal", "แคลอรี่"],
   ["macro", "สารอาหาร"],
   ["if", "IF · ความรู้สึก"],
@@ -31,9 +32,15 @@ const ACTIVITY = [
   ["1.9", "หนักมาก หรือทำงานใช้แรง"],
 ];
 const GOALS = [
-  ["lose", "ลดน้ำหนัก (กินน้อยกว่าที่ใช้ ~500 kcal/วัน)"],
+  ["lose", "ลดไขมัน (ลดแคลอรี่ 15–20% จากที่ใช้ต่อวัน)"],
   ["maintain", "รักษาน้ำหนัก"],
-  ["gain", "เพิ่มน้ำหนัก (กินมากกว่าที่ใช้ ~300 kcal/วัน)"],
+  ["muscle", "เพิ่มกล้ามเนื้อ (กินเกินที่ใช้ ~10%)"],
+  ["gain", "เพิ่มน้ำหนักทั่วไป (กินเกินที่ใช้ ~15%)"],
+];
+const MACRO_MODES = [
+  ["balanced", "สมดุล (โปรตีน → ไขมัน → คาร์บเป็นส่วนที่เหลือ)"],
+  ["lowcarb", "คาร์บต่ำ (คาร์บ ~20% ของแคลอรี่)"],
+  ["custom", "กำหนดเอง (ใส่เป็นกรัม)"],
 ];
 
 // ตัดรอบวันตอนตี 4: กินตอนตี 1 นับเป็นของเมื่อวาน
@@ -58,16 +65,80 @@ const timeOf = (ts) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-// Mifflin-St Jeor -> BMR -> TDEE -> เป้าหมายแคลอรี่และ macros
+/* ลำดับคำนวณ: BMR -> TDEE -> ปรับตามเป้าหมาย -> โปรตีน (ก./กก.) -> ไขมัน (% และไม่ต่ำกว่า 0.6 ก./กก.) -> คาร์บคือส่วนที่เหลือ
+   BMR ใช้ Mifflin-St Jeor และเปลี่ยนเป็น Katch-McArdle เมื่อรู้ % ไขมันในร่างกาย
+   ทั้งหมดเป็นค่าประมาณเริ่มต้น ปรับตามแนวโน้มน้ำหนักจริง 2–3 สัปดาห์ */
+const GOAL_ADJ = { lose: -0.2, maintain: 0, muscle: 0.1, gain: 0.15 };
+const PROTEIN_KG = { lose: 2.0, maintain: 1.6, muscle: 2.0, gain: 1.6 };
+const FAT_DEFAULT = { lose: 25, maintain: 28, muscle: 25, gain: 25 };
+
 function calc(p) {
-  const bmr = 10 * p.weight + 6.25 * p.height - 5 * p.age + (p.sex === "male" ? 5 : -161);
+  const bf = p.bodyFat >= 3 && p.bodyFat <= 60 ? Number(p.bodyFat) : null;
+  const lean = bf != null ? p.weight * (1 - bf / 100) : null;
+  const bmr = lean != null ? 370 + 21.6 * lean : 10 * p.weight + 6.25 * p.height - 5 * p.age + (p.sex === "male" ? 5 : -161);
   const tdee = bmr * p.activity;
-  const adj = { lose: -500, maintain: 0, gain: 300 }[p.goal];
-  const kcal = Math.max(1200, Math.round(tdee + adj));
-  const protein = Math.round(p.weight * { lose: 2.0, maintain: 1.6, gain: 1.8 }[p.goal]);
-  const fat = Math.round((kcal * 0.25) / 9);
-  const carbs = Math.max(0, Math.round((kcal - protein * 4 - fat * 9) / 4));
-  return { bmr: Math.round(bmr), tdee: Math.round(tdee), kcal, protein, carbs, fat };
+  const adj = p.goal === "lose" ? -(Number(p.lossPct) || 20) / 100 : GOAL_ADJ[p.goal] ?? 0;
+  const kcal = Math.max(p.sex === "male" ? 1500 : 1200, Math.round(tdee * (1 + adj)));
+  const perKg = PROTEIN_KG[p.goal] ?? 1.6;
+  let protein = p.weight * perKg;
+  if (lean != null) protein = Math.min(protein, lean * perKg * 1.2);
+  protein = Math.round(protein);
+  const fatMin = Math.round(p.weight * 0.6);
+  const mode = p.macroMode || "balanced";
+  let carbs, fat;
+  if (mode === "custom" && p.custom) {
+    protein = num(p.custom.protein);
+    carbs = num(p.custom.carbs);
+    fat = num(p.custom.fat);
+  } else if (mode === "lowcarb") {
+    carbs = Math.round((kcal * 0.2) / 4);
+    fat = Math.round((kcal - protein * 4 - carbs * 4) / 9);
+    if (fat < fatMin) {
+      fat = fatMin;
+      carbs = Math.max(0, Math.round((kcal - protein * 4 - fat * 9) / 4));
+    }
+  } else {
+    const fp = Number(p.fatPct) || FAT_DEFAULT[p.goal] || 25;
+    fat = Math.max(fatMin, Math.round((kcal * fp) / 100 / 9));
+    carbs = Math.max(0, Math.round((kcal - protein * 4 - fat * 9) / 4));
+  }
+  return { bmr: Math.round(bmr), tdee: Math.round(tdee), kcal, protein, carbs, fat, lean: lean != null ? Math.round(lean * 10) / 10 : null, mode };
+}
+
+// แนวโน้มน้ำหนักต่อสัปดาห์ (เส้นถดถอยจากน้ำหนัก 28 วันล่าสุด ต้องมี ≥3 ครั้ง และกินช่วง ≥14 วัน)
+function weeklyRate(ws, today) {
+  const cut = keyOf(new Date(new Date(today).getTime() - 28 * 864e5));
+  const pts = ws.filter((w) => w.day >= cut).map((w) => [new Date(w.day).getTime() / 864e5, w.kg]);
+  if (pts.length < 3) return null;
+  const xs = pts.map((q) => q[0]);
+  if (Math.max(...xs) - Math.min(...xs) < 14) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / pts.length;
+  const my = pts.reduce((a, q) => a + q[1], 0) / pts.length;
+  let sxy = 0;
+  let sxx = 0;
+  pts.forEach(([x, y]) => {
+    sxy += (x - mx) * (y - my);
+    sxx += (x - mx) ** 2;
+  });
+  const kg = (sxy / sxx) * 7;
+  return { kg, pct: (kg / my) * 100 };
+}
+
+function rateAdvice(goal, pct) {
+  if (goal === "muscle" || goal === "gain") {
+    const hi = goal === "muscle" ? 0.75 : 1.0;
+    const range = goal === "muscle" ? "0.25–0.5%" : "0.25–0.75%";
+    if (pct > hi) return `ขึ้นเร็วกว่าช่วงที่เหมาะ (${range} ต่อสัปดาห์) ส่วนเกินอาจเป็นไขมัน ลองลดแคลอรี่ลงประมาณ 100–150 kcal`;
+    if (pct < 0.1) return "แทบไม่ขึ้น (หรือลดลง) ถ้าเป็นแบบนี้ 2–3 สัปดาห์ ลองเพิ่มแคลอรี่ประมาณ 100–150 kcal";
+    return `อยู่ในช่วงที่เหมาะ (${range} ต่อสัปดาห์) ผู้เริ่มซ้อมใหม่ขึ้นได้เร็วกว่านี้เล็กน้อย`;
+  }
+  if (goal === "lose") {
+    if (pct < -1) return "ลดเร็วกว่า 1% ต่อสัปดาห์ เสี่ยงเสียกล้ามเนื้อ ลองเพิ่มแคลอรี่เล็กน้อย";
+    if (pct > -0.25) return "ลดช้ากว่าที่คาด ตรวจว่าบันทึกอาหารครบไหม ถ้ายังเป็นแบบนี้ 2–3 สัปดาห์ ลองลดแคลอรี่ประมาณ 100 kcal";
+    return "อยู่ในช่วงที่เหมาะ (ลด 0.25–1% ต่อสัปดาห์)";
+  }
+  if (Math.abs(pct) > 0.5) return "น้ำหนักเปลี่ยนมากกว่า 0.5% ต่อสัปดาห์ ถ้าต้องการรักษาน้ำหนัก ลองปรับแคลอรี่ประมาณ 100 kcal ตามทิศทาง";
+  return "น้ำหนักค่อนข้างคงที่";
 }
 
 function resize(file, max = 1024) {
@@ -270,7 +341,7 @@ export default function Home() {
   const fileRef = useRef(null);
   const [profile, setProfile] = useState(null);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ sex: "male", age: "", weight: "", height: "", activity: "1.375", goal: "lose" });
+  const [form, setForm] = useState({ sex: "male", age: "", weight: "", height: "", activity: "1.375", goal: "lose", bodyFat: "", lossPct: "20", macroMode: "balanced", fatPct: "", cP: "", cC: "", cF: "" });
   const [newWeight, setNewWeight] = useState("");
   const [pickDay, setPickDay] = useState(""); // "" = วันนี้
   const [addTime, setAddTime] = useState("");
@@ -286,6 +357,7 @@ export default function Home() {
   const [page, setPage] = useState("log");
   const [wDay, setWDay] = useState("");
   const [wKg, setWKg] = useState("");
+  const [wBf, setWBf] = useState("");
 
   useEffect(() => {
     try {
@@ -315,7 +387,9 @@ export default function Home() {
   const dayEntries = entries.filter((e) => e.day === viewDay).sort((a, b) => a.ts - b.ts);
   const sum = (k) => Math.round(dayEntries.reduce((s, e) => s + e[k], 0) * 10) / 10;
 
-  const calcd = profile ? calc(profile) : null;
+  const bfDays = Object.keys(days).filter((d) => days[d].bodyFat).sort();
+  const bfLatest = bfDays.length ? days[bfDays[bfDays.length - 1]].bodyFat : profile?.bodyFat ?? null;
+  const calcd = profile ? calc({ ...profile, bodyFat: bfLatest }) : null;
   const goals = targets ? { ...(calcd || {}), ...targets, custom: true } : calcd;
   const dd = days[viewDay] || {};
   const setDay = (patch) => setDays((p) => ({ ...p, [viewDay]: { ...p[viewDay], ...patch } }));
@@ -334,13 +408,22 @@ export default function Home() {
         height: String(profile.height),
         activity: String(profile.activity),
         goal: profile.goal,
+        bodyFat: bfLatest ? String(bfLatest) : "",
+        lossPct: String(profile.lossPct || 20),
+        macroMode: profile.macroMode || "balanced",
+        fatPct: profile.fatPct ? String(profile.fatPct) : "",
+        cP: profile.custom ? String(profile.custom.protein) : "",
+        cC: profile.custom ? String(profile.custom.carbs) : "",
+        cF: profile.custom ? String(profile.custom.fat) : "",
       });
     }
     setEditing(true);
   }
 
+  const bfOk = form.bodyFat === "" || (form.bodyFat >= 3 && form.bodyFat <= 60);
+  const customOk = form.macroMode !== "custom" || (form.cP > 0 && form.cC >= 0 && form.cF > 0 && form.cC !== "");
   const formOk =
-    form.age >= 10 && form.age <= 100 && form.weight >= 30 && form.weight <= 250 && form.height >= 100 && form.height <= 230;
+    form.age >= 10 && form.age <= 100 && form.weight >= 30 && form.weight <= 250 && form.height >= 100 && form.height <= 230 && bfOk && customOk;
 
   function saveProfile() {
     if (!formOk) return;
@@ -358,8 +441,14 @@ export default function Home() {
       height: Number(form.height),
       activity: Number(form.activity),
       goal: form.goal,
+      bodyFat: form.bodyFat ? Number(form.bodyFat) : undefined,
+      lossPct: Number(form.lossPct) || 20,
+      macroMode: form.macroMode,
+      fatPct: form.fatPct ? Number(form.fatPct) : undefined,
+      custom: form.macroMode === "custom" ? { protein: Number(form.cP) || 0, carbs: Number(form.cC) || 0, fat: Number(form.cF) || 0 } : undefined,
       weights,
     });
+    if (form.bodyFat) setDays((d) => ({ ...d, [dayKey()]: { ...d[dayKey()], bodyFat: Number(form.bodyFat) } }));
     setEditing(false);
   }
 
@@ -520,6 +609,9 @@ export default function Home() {
       p.weights.forEach((w) => {
         n[w.day] = { ...(n[w.day] || {}), weight: w.kg };
       });
+      (p.bodyFats || []).forEach((b) => {
+        n[b.day] = { ...(n[b.day] || {}), bodyFat: b.bf };
+      });
       return n;
     });
     if (profile && p.weights.length) {
@@ -619,10 +711,11 @@ export default function Home() {
   Object.entries(days).forEach(([d, v]) => {
     if (v.weight) wmap[d] = v.weight;
   });
-  const allW = Object.keys(wmap).sort().map((d) => ({ day: d, kg: wmap[d] }));
+  const allW = Object.keys(wmap).sort().map((d) => ({ day: d, kg: wmap[d], bf: days[d]?.bodyFat ?? null }));
   const first = allW[0];
   const last = allW[allW.length - 1];
   const change = first && last ? Math.round((last.kg - first.kg) * 10) / 10 : 0;
+  const rate = weeklyRate(allW, dayKey());
 
   const tot = {};
   entries.forEach((e) => {
@@ -642,6 +735,8 @@ export default function Home() {
     ifh: ifHours(days[d]?.fastStart, days[d]?.eatStart),
     feel: days[d]?.feeling ?? null,
     weight: wmap[d] ?? null,
+    bf: days[d]?.bodyFat ?? null,
+    lean: wmap[d] && days[d]?.bodyFat ? Math.round(wmap[d] * (1 - days[d].bodyFat / 100) * 10) / 10 : null,
     score: dayScore(tot[d], goals),
   }));
   const rows = range ? rowsAll.slice(-range) : rowsAll;
@@ -698,6 +793,13 @@ export default function Home() {
           <b>{last ? last.kg + " กก." : "-"}</b>
           {first && last && allW.length > 1 && <small>เริ่มต้น {first.kg} · เปลี่ยน {change > 0 ? "+" : ""}{change} กก.</small>}
         </div>
+        {bfLatest && last && (
+          <div className="stat">
+            <span>มวลไร้ไขมัน</span>
+            <b>{(last.kg * (1 - bfLatest / 100)).toFixed(1)} กก.</b>
+            <small>ไขมัน {bfLatest}% · {((last.kg * bfLatest) / 100).toFixed(1)} กก.</small>
+          </div>
+        )}
         <div className="stat">
           <span>แคลอรี่เฉลี่ย/วัน</span>
           <b>{avgKcal == null ? "-" : Math.round(avgKcal)}</b>
@@ -707,6 +809,18 @@ export default function Home() {
         <div className="stat"><span>ชั่วโมง IF เฉลี่ย</span><b>{avgIf == null ? "-" : avgIf.toFixed(1) + " ชม."}</b></div>
         <div className="stat"><span>ความรู้สึกเฉลี่ย</span><b>{avgFeel == null ? "-" : avgFeel.toFixed(1) + " / 5"}</b></div>
       </div>
+
+      {rate ? (
+        <section className="card">
+          <h2>แนวโน้มน้ำหนักต่อสัปดาห์</h2>
+          <p className="rate">
+            <b>{rate.kg > 0 ? "+" : ""}{rate.kg.toFixed(2)} กก.</b> ({rate.pct > 0 ? "+" : ""}{rate.pct.toFixed(2)}% ต่อสัปดาห์)
+          </p>
+          <p className="hint">{rateAdvice(profile?.goal, rate.pct)}</p>
+        </section>
+      ) : (
+        allW.length > 0 && <p className="meta">บันทึกน้ำหนักอย่างน้อย 3 ครั้ง ในช่วง 2 สัปดาห์ขึ้นไป เพื่อดูแนวโน้มต่อสัปดาห์</p>
+      )}
 
       <div className="chips" role="tablist" aria-label="เลือกกราฟ">
         {CHARTS.map(([k, l]) => (
@@ -736,12 +850,28 @@ export default function Home() {
             </section>
             <section className="card">
               <h2>บันทึกน้ำหนัก</h2>
-              <div className="wform">
+              <div className="wform wform3">
                 <input type="date" value={wDay} max={dayKey()} onChange={(e) => setWDay(e.target.value)} aria-label="วันที่" />
                 <input type="number" inputMode="decimal" value={wKg} onChange={(e) => setWKg(e.target.value)} placeholder="กก." aria-label="น้ำหนัก (กก.)" />
+                <input type="number" inputMode="decimal" value={wBf} onChange={(e) => setWBf(e.target.value)} placeholder="% ไขมัน" aria-label="เปอร์เซ็นต์ไขมัน (ไม่บังคับ)" />
               </div>
-              <button className="primary" disabled={!wKg} onClick={() => { if (logWeight(wDay, wKg)) setWKg(""); }}>
-                บันทึกน้ำหนัก
+              <button
+                className="primary"
+                disabled={!wKg && !wBf}
+                onClick={() => {
+                  let ok = true;
+                  if (wKg) ok = logWeight(wDay, wKg);
+                  const b = Math.round(parseFloat(wBf) * 10) / 10;
+                  if (ok && wBf && b >= 3 && b <= 60 && wDay && wDay <= dayKey()) {
+                    setDays((d) => ({ ...d, [wDay]: { ...d[wDay], bodyFat: b } }));
+                  }
+                  if (ok) {
+                    setWKg("");
+                    setWBf("");
+                  }
+                }}
+              >
+                บันทึก
               </button>
               <p className="hint">เลือกวันที่เดิมแล้วบันทึกซ้ำ จะเป็นการแก้ค่าของวันนั้น</p>
             </section>
@@ -755,7 +885,7 @@ export default function Home() {
                     return (
                       <li key={w.day}>
                         <span className="time">{+w.day.slice(8)}/{+w.day.slice(5, 7)}</span>
-                        <span className="name">{w.kg} กก.</span>
+                        <span className="name">{w.kg} กก.{w.bf ? ` · ไขมัน ${w.bf}%` : ""}</span>
                         <span className="diff">{d === null ? "" : d > 0 ? `+${d}` : d}</span>
                         {allW.length > 1 ? (
                           <button className="del" aria-label={`ลบน้ำหนักวันที่ ${w.day}`} onClick={() => removeWeight(w.day)}>ลบ</button>
@@ -770,6 +900,13 @@ export default function Home() {
             )}
           </>
         )}
+        {chart === "body" && (
+          <section className="card">
+            <h2>องค์ประกอบร่างกาย</h2>
+            <BodyComp rows={rows} />
+            <p className="hint">เส้นชมพู = % ไขมัน (แกนซ้าย) · เส้นฟ้า = มวลไร้ไขมัน กก. (แกนขวา) เครื่องวัดไขมันตามบ้านคลาดเคลื่อนได้ ให้ดูแนวโน้มจากเครื่องเดียวกัน เวลาเดียวกัน</p>
+          </section>
+        )}
         {chart === "kcal" && (
           <section className="card">
             <h2>แคลอรี่ที่กินจริง เทียบเป้าหมายรายวัน</h2>
@@ -779,14 +916,15 @@ export default function Home() {
         )}
         {chart === "macro" && (
           <section className="card">
-            <h2>สัดส่วนสารอาหารหลัก</h2>
+            <h2>สัดส่วนสารอาหารหลัก (% ของแคลอรี่)</h2>
             <MacroDonut
               parts={[
-                { name: "โปรตีน", g: macroG("protein"), color: "#6fb3f2" },
-                { name: "คาร์โบไฮเดรต", g: macroG("carbs"), color: "#f6cf6a" },
-                { name: "ไขมัน", g: macroG("fat"), color: "#f29bb0" },
+                { name: "โปรตีน", grams: macroG("protein"), kcal: macroG("protein") * 4, color: "#6fb3f2" },
+                { name: "คาร์โบไฮเดรต", grams: macroG("carbs"), kcal: macroG("carbs") * 4, color: "#f6cf6a" },
+                { name: "ไขมัน", grams: macroG("fat"), kcal: macroG("fat") * 9, color: "#f29bb0" },
               ]}
             />
+            <p className="hint">คิดจากแคลอรี่ที่ได้จากแต่ละสารอาหาร (โปรตีน/คาร์บ 4 kcal ต่อกรัม ไขมัน 9 kcal ต่อกรัม)</p>
           </section>
         )}
         {chart === "if" && (
@@ -856,6 +994,49 @@ export default function Home() {
               ))}
             </select>
           </label>
+          <label className="field">
+            <span>เปอร์เซ็นต์ไขมันในร่างกาย (%) ไม่บังคับ</span>
+            <input type="number" inputMode="decimal" value={form.bodyFat} onChange={setF("bodyFat")} placeholder="เช่น 18 (ถ้ารู้ จะคำนวณแม่นขึ้น)" />
+          </label>
+          <details className="more">
+            <summary>ตัวเลือกขั้นสูง (สัดส่วนสารอาหาร)</summary>
+            {form.goal === "lose" && (
+              <label className="field">
+                <span>ระดับการลด</span>
+                <select value={form.lossPct} onChange={setF("lossPct")}>
+                  <option value="15">ลด 15% (ค่อยเป็นค่อยไป)</option>
+                  <option value="20">ลด 20% (เร็วขึ้น)</option>
+                </select>
+              </label>
+            )}
+            <label className="field">
+              <span>รูปแบบสัดส่วน</span>
+              <select value={form.macroMode} onChange={setF("macroMode")}>
+                {MACRO_MODES.map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </select>
+            </label>
+            {form.macroMode === "balanced" && (
+              <label className="field">
+                <span>ไขมัน (% ของแคลอรี่)</span>
+                <select value={form.fatPct} onChange={setF("fatPct")}>
+                  <option value="">อัตโนมัติตามเป้าหมาย</option>
+                  {[20, 25, 30, 35].map((v) => (
+                    <option key={v} value={v}>{v}%</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {form.macroMode === "custom" && (
+              <div className="grid3">
+                <label className="field"><span>โปรตีน (ก.)</span><input type="number" inputMode="numeric" value={form.cP} onChange={setF("cP")} /></label>
+                <label className="field"><span>คาร์บ (ก.)</span><input type="number" inputMode="numeric" value={form.cC} onChange={setF("cC")} /></label>
+                <label className="field"><span>ไขมัน (ก.)</span><input type="number" inputMode="numeric" value={form.cF} onChange={setF("cF")} /></label>
+              </div>
+            )}
+          </details>
+          <p className="hint">ค่าที่ได้เป็นค่าประมาณเริ่มต้น ปรับตามแนวโน้มน้ำหนักจริง 2–3 สัปดาห์ ไม่ใช่คำแนะนำทางการแพทย์</p>
           <div className="row">
             {profile ? <button className="ghost" onClick={() => setEditing(false)}>ยกเลิก</button> : <span />}
             <button className="primary" onClick={saveProfile} disabled={!formOk}>
@@ -1046,6 +1227,10 @@ export default function Home() {
         </p>
       )}
 
+      {goals && !editing && !goals.custom && goals.mode === "balanced" && goals.carbs < 100 && (
+        <p className="meta warn">คาร์บเป้าหมายค่อนข้างต่ำ (น้อยกว่า 100 ก./วัน) อาจเหนื่อยง่ายตอนซ้อม ถ้าตั้งใจกินคาร์บต่ำ ข้ามข้อความนี้ได้</p>
+      )}
+
       <section>
         <h2>บันทึก{dayLabel}</h2>
         {dayEntries.length === 0 ? (
@@ -1173,6 +1358,19 @@ export default function Home() {
                 if (!(v >= 30 && v <= 250)) return;
                 if (profile) logWeight(viewDay, v);
                 else setDay({ weight: v });
+              }}
+            />
+          </label>
+          <label>
+            <span>ไขมันในร่างกาย (%)</span>
+            <input
+              key={viewDay + "-bf-" + (dd.bodyFat ?? "")}
+              type="number"
+              inputMode="decimal"
+              defaultValue={dd.bodyFat ?? ""}
+              onBlur={(e) => {
+                const v = Math.round(parseFloat(e.target.value) * 10) / 10;
+                setDay({ bodyFat: v >= 3 && v <= 60 ? v : undefined });
               }}
             />
           </label>

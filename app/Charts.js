@@ -73,19 +73,19 @@ export function CalBars({ rows, target }) {
   );
 }
 
-/* 3. สัดส่วนสารอาหารหลัก (โปรตีน / คาร์บ / ไขมัน) */
+/* 3. สัดส่วนสารอาหารหลัก คิดเป็น % ของแคลอรี่ (โปรตีน/คาร์บ 4 kcal ต่อก. ไขมัน 9 kcal ต่อก.) */
 export function MacroDonut({ parts }) {
-  const total = parts.reduce((s, p) => s + p.g, 0);
+  const total = parts.reduce((s, p) => s + p.kcal, 0);
   if (!total) return <Empty />;
   const r = 46;
   const C = 2 * Math.PI * r;
   let off = 0;
   return (
     <div className="donut">
-      <svg viewBox="0 0 120 120" role="img" aria-label="สัดส่วนสารอาหารหลัก">
+      <svg viewBox="0 0 120 120" role="img" aria-label="สัดส่วนสารอาหารหลักเป็นเปอร์เซ็นต์ของแคลอรี่">
         <g transform="rotate(-90 60 60)">
           {parts.map((p) => {
-            const len = (C * p.g) / total;
+            const len = (C * p.kcal) / total;
             const el = <circle key={p.name} cx="60" cy="60" r={r} fill="none" stroke={p.color} strokeWidth="18" strokeDasharray={`${len} ${C - len}`} strokeDashoffset={-off} />;
             off += len;
             return el;
@@ -97,11 +97,41 @@ export function MacroDonut({ parts }) {
           <li key={p.name}>
             <i style={{ background: p.color }} />
             <span>{p.name}</span>
-            <b>{Math.round(p.g).toLocaleString()} ก. ({Math.round((p.g / total) * 100)}%)</b>
+            <b>{Math.round((p.kcal / total) * 100)}% · {Math.round(p.grams).toLocaleString()} ก.</b>
           </li>
         ))}
       </ul>
     </div>
+  );
+}
+
+/* 3.5 องค์ประกอบร่างกาย: % ไขมัน (ซ้าย) และมวลไร้ไขมัน (ขวา) */
+export function BodyComp({ rows }) {
+  const d = rows.filter((r) => r.bf != null);
+  if (d.length < 2) return <Empty>ใส่เปอร์เซ็นต์ไขมันในร่างกายอย่างน้อย 2 วัน เพื่อดูกราฟนี้</Empty>;
+  const range = (vals) => {
+    let lo = Math.min(...vals);
+    let hi = Math.max(...vals);
+    if (hi - lo < 2) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.1;
+    return [lo - pad, hi + pad];
+  };
+  const [lo, hi] = range(d.map((r) => r.bf));
+  const leanVals = d.map((r) => r.lean).filter((v) => v != null);
+  const [lo2, hi2] = leanVals.length ? range(leanVals) : [0, 1];
+  const x = lineX(d.length);
+  const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const y2 = (v) => T + (1 - (v - lo2) / (hi2 - lo2)) * (H - T - B);
+  const leanPts = d.map((r, i) => (r.lean != null ? [x(i), y2(r.lean)] : null)).filter(Boolean);
+  return (
+    <Svg label="กราฟเปอร์เซ็นต์ไขมันและมวลไร้ไขมัน">
+      <Axes lo={lo} hi={hi} fmt={(v) => v.toFixed(1)} right={(i, t) => (lo2 + ((hi2 - lo2) * i) / t).toFixed(1)} />
+      <polyline className="c-line2" points={d.map((r, i) => `${x(i)},${y(r.bf)}`).join(" ")} />
+      {d.map((r, i) => <circle key={r.day} className="c-dot2" cx={x(i)} cy={y(r.bf)} r="3.5" />)}
+      {leanPts.length > 1 && <polyline className="chart-line" points={leanPts.map((q) => q.join(",")).join(" ")} />}
+      {leanPts.map((q, i) => <circle key={i} className="chart-dot" cx={q[0]} cy={q[1]} r="3" />)}
+      <XLabels days={d.map((r) => r.day)} cx={x} />
+    </Svg>
   );
 }
 

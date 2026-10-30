@@ -71,7 +71,7 @@ const numOf = (v) => {
 export async function parseWorkbook(file) {
   const XLSX = await import("xlsx");
   const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-  const out = { foods: [], days: {}, weights: [], targets: null, latest: null };
+  const out = { foods: [], days: {}, weights: [], bodyFats: [], targets: null, latest: null };
   const t = {};
   for (const name of wb.SheetNames) {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null, blankrows: false });
@@ -97,7 +97,7 @@ export async function parseWorkbook(file) {
         if (!out.latest || day > out.latest) out.latest = day;
       }
     } else {
-      const c = { d: col(/^วันที่$/), fast: col(/^เวลาเริ่มงด/), eat: col(/^เวลาเริ่มกิน/), feel: col(/^ความรู้สึก/), w: col(/^น้ำหนัก/), note: col(/^หมายเหตุ/) };
+      const c = { d: col(/^วันที่$/), fast: col(/^เวลาเริ่มงด/), eat: col(/^เวลาเริ่มกิน/), feel: col(/^ความรู้สึก/), w: col(/^น้ำหนัก/), note: col(/^หมายเหตุ/), bf: col(/ไขมันในร่างกาย|^%\s*ไขมัน|body\s*fat/i) };
       for (const r of body) {
         const day = serialKey(r[c.d]);
         if (!day) continue;
@@ -111,6 +111,8 @@ export async function parseWorkbook(file) {
         if (feel) info.feeling = +feel[1];
         if (note) info.note = note;
         if (Object.keys(info).length) out.days[day] = info;
+        const bf = c.bf >= 0 ? numOf(r[c.bf]) : 0;
+        if (bf >= 3 && bf <= 60) out.bodyFats.push({ day, bf: Math.round(bf * 10) / 10 });
         const kg = numOf(r[c.w]);
         if (kg >= 30 && kg <= 250) out.weights.push({ day, kg: Math.round(kg * 10) / 10 });
       }
